@@ -14,89 +14,50 @@ function handleCenter(node, handleId) {
   }
 }
 
-function buildAlignmentGroups(nodes, edges, axis, threshold) {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
-  const parent = new Map()
-  const find = (id) => {
-    const current = parent.get(id)
-    if (current === id) return id
-    const root = find(current)
-    parent.set(id, root)
-    return root
-  }
-  const union = (left, right) => {
-    if (!parent.has(left)) parent.set(left, left)
-    if (!parent.has(right)) parent.set(right, right)
-    const leftRoot = find(left)
-    const rightRoot = find(right)
-    if (leftRoot === rightRoot) return
-    const [root, child] = String(leftRoot) < String(rightRoot)
-      ? [leftRoot, rightRoot]
-      : [rightRoot, leftRoot]
-    parent.set(child, root)
-  }
-
-  for (const edge of edges) {
-    const sourceNode = byId.get(edge.source)
-    const targetNode = byId.get(edge.target)
-    if (!sourceNode || !targetNode) continue
-    const sourceHandle = edge.sourceHandle || 'right'
-    const targetHandle = edge.targetHandle || 'left'
-    const compatible = axis === 'x'
-      ? VERTICAL_HANDLES.has(sourceHandle) && VERTICAL_HANDLES.has(targetHandle)
-      : HORIZONTAL_HANDLES.has(sourceHandle) && HORIZONTAL_HANDLES.has(targetHandle)
-    if (!compatible) continue
-    const sourcePoint = handleCenter(sourceNode, sourceHandle)
-    const targetPoint = handleCenter(targetNode, targetHandle)
-    if (!sourcePoint || !targetPoint) continue
-    if (Math.abs(sourcePoint[axis] - targetPoint[axis]) <= threshold) {
-      union(sourceNode.id, targetNode.id)
-    }
-  }
-
-  const groups = new Map()
-  for (const nodeId of parent.keys()) {
-    const root = find(nodeId)
-    if (!groups.has(root)) groups.set(root, [])
-    groups.get(root).push(nodeId)
-  }
-  return [...groups.values()].filter((group) => group.length > 1)
-}
-
 /**
- * 以连接点中心为约束求解近对齐节点。
- * 返回 Map<nodeId, position>，不修改入参，且结果与 edges 顺序无关。
+ * 将当前拖动节点的连接点吸附到附近的直接相连节点。
+ * 只返回 movableNodeId 的新坐标，其他节点永远不会被带动。
  */
 export function computeNearAlignedPositions({
-  nodes = [], edges = [], threshold = 10, anchorNodeId = null, scopeNodeId = null,
+  nodes = [], edges = [], threshold = 10, movableNodeId = null,
 }) {
-  const original = new Map(nodes.map((node) => [node.id, node.position]))
-  const working = nodes.map((node) => ({ ...node, position: { ...node.position } }))
-  const byId = new Map(working.map((node) => [node.id, node]))
+  if (!movableNodeId) return new Map()
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const movable = byId.get(movableNodeId)
+  if (!movable) return new Map()
+  const position = { ...movable.position }
 
   for (const axis of ['x', 'y']) {
-    for (const group of buildAlignmentGroups(working, edges, axis, threshold)) {
-      if (scopeNodeId && !group.includes(scopeNodeId)) continue
-      const groupNodes = group.map((id) => byId.get(id)).filter(Boolean)
-      const centers = groupNodes.map((node) => handleCenter(node, axis === 'x' ? 'top' : 'left')[axis])
-      const anchorIndex = anchorNodeId ? groupNodes.findIndex((node) => node.id === anchorNodeId) : -1
-      const rawTarget = anchorIndex >= 0
-        ? centers[anchorIndex]
-        : centers.reduce((sum, value) => sum + value, 0) / centers.length
-      const targetCenter = Math.round(rawTarget * 2) / 2
+    const deltas = []
+    for (const edge of edges) {
+      const isSource = edge.source === movableNodeId
+      const isTarget = edge.target === movableNodeId
+      if (!isSource && !isTarget) continue
 
-      groupNodes.forEach((node, index) => {
-        node.position[axis] += targetCenter - centers[index]
-      })
+      const neighbor = byId.get(isSource ? edge.target : edge.source)
+      if (!neighbor) continue
+      const movableHandle = isSource
+        ? (edge.sourceHandle || 'right')
+        : (edge.targetHandle || 'left')
+      const neighborHandle = isSource
+        ? (edge.targetHandle || 'left')
+        : (edge.sourceHandle || 'right')
+      const compatible = axis === 'x'
+        ? VERTICAL_HANDLES.has(movableHandle) && VERTICAL_HANDLES.has(neighborHandle)
+        : HORIZONTAL_HANDLES.has(movableHandle) && HORIZONTAL_HANDLES.has(neighborHandle)
+      if (!compatible) continue
+
+      const movablePoint = handleCenter({ ...movable, position }, movableHandle)
+      const neighborPoint = handleCenter(neighbor, neighborHandle)
+      const delta = neighborPoint[axis] - movablePoint[axis]
+      if (Math.abs(delta) <= threshold) deltas.push(delta)
     }
+    if (!deltas.length) continue
+    const averageDelta = deltas.reduce((sum, value) => sum + value, 0) / deltas.length
+    position[axis] = Math.round((position[axis] + averageDelta) * 2) / 2
   }
 
-  const changed = new Map()
-  for (const node of working) {
-    const before = original.get(node.id)
-    if (Math.abs(node.position.x - before.x) >= 0.01 || Math.abs(node.position.y - before.y) >= 0.01) {
-      changed.set(node.id, node.position)
-    }
-  }
-  return changed
+  const moved = Math.abs(position.x - movable.position.x) >= 0.01
+    || Math.abs(position.y - movable.position.y) >= 0.01
+  return moved ? new Map([[movableNodeId, position]]) : new Map()
 }

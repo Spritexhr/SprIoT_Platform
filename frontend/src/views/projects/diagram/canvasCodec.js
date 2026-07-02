@@ -1,4 +1,5 @@
-import { getPidEdgeStyle, normalizeEdgeData } from './edgeTypes'
+import { getPidEdgeStyle, normalizeEdgeData } from './edgeTypes.js'
+import { serializedNodeSize } from './nodeGeometry.js'
 
 export function emptyCanvas() {
   return { version: 1, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], edges: [] }
@@ -54,7 +55,9 @@ export function flowToCanvas({ nodes = [], edges = [], viewport }) {
         x: Math.round(node.position.x * 2) / 2,
         y: Math.round(node.position.y * 2) / 2,
       },
-      size: node.data?.size,
+      // 尺寸由 Vue Flow 内部测量，只在序列化时读取；
+      // 不再为了存尺寸而替换运行中的节点对象。
+      size: serializedNodeSize(node),
       binding: node.data?.binding || { kind: 'none', id: '' },
       data: stripRuntimeData(node.data),
     })),

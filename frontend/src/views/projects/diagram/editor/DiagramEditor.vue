@@ -14,7 +14,6 @@
         :delete-key-code="['Backspace', 'Delete']"
         :connection-mode="ConnectionMode.Loose"
         @nodes-change="onNodesChange"
-        @nodes-initialized="onNodesInitialized"
         @node-drag-stop="onNodeDragStop"
         @edges-change="onEdgesChange"
         @connect="onConnect"
@@ -78,7 +77,6 @@ const nodes = ref(initial.nodes)
 const edges = ref(initial.edges)
 const viewport = ref(props.diagram?.canvas?.viewport || { x: 0, y: 0, zoom: 1 })
 const defaultViewport = viewport.value
-const nodesReady = ref(false)
 
 const selection = ref(null)        // { kind: 'node'|'edge', payload }
 
@@ -88,7 +86,6 @@ watch(() => props.diagram?.id, () => {
   nodes.value = init.nodes
   edges.value = init.edges
   viewport.value = props.diagram?.canvas?.viewport || { x: 0, y: 0, zoom: 1 }
-  nodesReady.value = false
   selection.value = null
 })
 
@@ -100,56 +97,24 @@ function onEdgesChange(changes = []) {
   if (changes.some((change) => change.type !== 'select')) emitCanvas()
 }
 
-function storeMeasuredSize(nodeId, dimensions) {
-  const width = Number(dimensions?.width || 0)
-  const height = Number(dimensions?.height || 0)
-  if (!width || !height) return false
-  const index = nodes.value.findIndex((node) => node.id === nodeId)
-  if (index < 0) return false
-  const current = nodes.value[index]
-  const oldSize = current.data?.size
-  if (oldSize?.w === width && oldSize?.h === height) return false
-  nodes.value[index] = {
-    ...current,
-    data: { ...(current.data || {}), size: { w: width, h: height } },
-  }
-  return true
-}
-
 function onNodesChange(changes = []) {
-  let sizeChanged = false
   let shouldPersist = false
   for (const change of changes) {
-    if (change.type === 'dimensions') {
-      sizeChanged = storeMeasuredSize(change.id, change.dimensions) || sizeChanged
-    } else if (change.type === 'remove' || change.type === 'add' || change.type === 'reset') {
+    if (change.type === 'remove' || change.type === 'add' || change.type === 'reset') {
       shouldPersist = true
     } else if (change.type === 'position' && change.dragging === false) {
       // 键盘方向键移动没有 node-drag-stop，需在最终 position change 落盘。
       shouldPersist = true
     }
   }
-  if (nodesReady.value && (sizeChanged || shouldPersist)) emitCanvas()
-}
-
-async function onNodesInitialized(initializedNodes = []) {
-  let sizeChanged = false
-  for (const node of initializedNodes) {
-    sizeChanged = storeMeasuredSize(node.id, node.dimensions) || sizeChanged
-  }
-  await nextTick()
-  // 重新打开画布时，必须等 DOM 尺寸测量完成后再校正；
-  // 否则只有左上角坐标，会再次把连接点中心当成节点边缘。
-  const aligned = await normalizeNearAlignedEdges()
-  nodesReady.value = true
-  if (aligned || sizeChanged) emitCanvas()
+  if (shouldPersist) emitCanvas()
 }
 function onViewportChangeEnd(v) {
   viewport.value = v
   emitCanvas()
 }
 
-async function onConnect(connection) {
+function onConnect(connection) {
   const id = `e_${Date.now()}_${Math.floor(Math.random() * 1000)}`
   const data = normalizeEdgeData()
   edges.value.push({
@@ -163,10 +128,6 @@ async function onConnect(connection) {
     label: data.label,
     style: getPidEdgeStyle(data.kind),
     markerEnd: 'arrowclosed',
-  })
-  await normalizeNearAlignedEdges({
-    anchorNodeId: connection.source,
-    scopeNodeId: connection.source,
   })
   emitCanvas()
 }
@@ -185,13 +146,12 @@ function clearSelection() {
 // Vue Flow 的网格吸附对齐的是节点左上角，不是连接点中心。节点尺寸不同时，
 // 即使看起来已对齐，线端仍可能差几像素，SmoothStepEdge 会把它画成小折皱。
 const HANDLE_ALIGN_THRESHOLD = 10
-async function normalizeNearAlignedEdges({ anchorNodeId = null, scopeNodeId = null } = {}) {
+async function normalizeNearAlignedEdges(movableNodeId) {
   const changed = computeNearAlignedPositions({
     nodes: nodes.value,
     edges: edges.value,
     threshold: HANDLE_ALIGN_THRESHOLD,
-    anchorNodeId,
-    scopeNodeId,
+    movableNodeId,
   })
   if (!changed.size) return false
   for (const [nodeId, position] of changed) {
@@ -205,7 +165,7 @@ async function normalizeNearAlignedEdges({ anchorNodeId = null, scopeNodeId = nu
 }
 
 async function onNodeDragStop({ node }) {
-  await normalizeNearAlignedEdges({ anchorNodeId: node?.id, scopeNodeId: node?.id })
+  await normalizeNearAlignedEdges(node?.id)
   // 无论是否发生自动对齐，拖动结束都是一次完整的持久化事件。
   emitCanvas()
 }
@@ -275,7 +235,7 @@ function onDrop(event) {
     : project({ x: event.clientX, y: event.clientY })
 
   const id = `n_${payload.type}_${Date.now()}_${Math.floor(Math.random() * 1000)}`
-  nodes.value.push({
+  const newNode = {
     id,
     type: payload.type,
     position: { x: Math.round(pos.x), y: Math.round(pos.y) },
@@ -283,7 +243,10 @@ function onDrop(event) {
       ...(payload.defaultData || {}),
       binding: { kind: 'none', id: '' },
     },
-  })
+  }
+  // 使用新数组递交给 Vue Flow，避免原地 push 与尺寸测量的
+  // 内部同步交错，把上一个新增节点的旧坐标写回。
+  nodes.value = [...nodes.value, newNode]
   emitCanvas()
 }
 </script>
