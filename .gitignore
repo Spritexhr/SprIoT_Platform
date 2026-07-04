@@ -48,3 +48,6 @@ simulation/config.yaml
 
 # Simulation webui 运行时数据（sqlite、渲染的临时 manifest/config、日志）
 simulation/webui/runtime/
+
+# 私密课程作业与参考资料（仅保留在本机，不上传 GitHub）
+docs/not_uploaded_to_github_documents/
