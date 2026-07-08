@@ -139,6 +139,14 @@ ADMIN_PORT=48081
 >
 > 生产环境务必使用强密码，并修改 `SECRET_KEY`、`DEBUG=False`、`ALLOWED_HOSTS=yourdomain.com`。
 
+如果 Django Admin 通过 HTTPS 反向代理域名访问，还需要在 `.env` 中配置完整 Origin（包含协议）：
+
+```dotenv
+EXTRA_CSRF_TRUSTED_ORIGINS=https://iot-admin.example.com
+```
+
+多个域名使用逗号分隔。该配置只用于 Django CSRF Origin 校验；不要为了绕过 403 而关闭 CSRF 中间件。
+
 ### 4.2 构建并启动所有服务
 
 在项目根目录执行：

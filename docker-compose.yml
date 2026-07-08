@@ -110,6 +110,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  mcp:
+    profiles: ["mcp"]
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    container_name: iot-mcp
+    environment:
+      - IOT_API_BASE_URL=http://backend:8000/api
+      - IOT_API_USERNAME=${IOT_API_USERNAME:-}
+      - IOT_API_PASSWORD=${IOT_API_PASSWORD:-}
+      - IOT_API_ACCESS_TOKEN=${IOT_API_ACCESS_TOKEN:-}
+      - IOT_MCP_CONFIRMATION_SECRET=${IOT_MCP_CONFIRMATION_SECRET:-}
+      - IOT_MCP_TRANSPORT=streamable-http
+      - IOT_MCP_HOST=0.0.0.0
+      - IOT_MCP_PORT=8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-48082}:8000"
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

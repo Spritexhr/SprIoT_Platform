@@ -237,6 +237,17 @@ CSRF_TRUSTED_ORIGINS = [
     # 开发时若从局域网设备访问，请添加如 "http://192.168.x.x:5173"
 ]
 
+# 支持通过环境变量追加反向代理/公网域名（必须包含 http:// 或 https://，逗号分隔）。
+# 与 EXTRA_CORS_ORIGINS 分开配置：Django Admin 的同源表单通常只需要 CSRF trusted origin，
+# 不需要额外开放跨域 API 访问。
+_extra_csrf_origins = os.environ.get("EXTRA_CSRF_TRUSTED_ORIGINS", "")
+if _extra_csrf_origins:
+    CSRF_TRUSTED_ORIGINS.extend(
+        origin.strip()
+        for origin in _extra_csrf_origins.split(",")
+        if origin.strip()
+    )
+
 # MQTT 与设备配置：仅从 platform_settings 数据库读取
 # 使用 SimpleLazyObject 延迟读取，避免 settings 加载时 DB 未就绪
 # 启动前由 sensors.apps 自动执行 `configure --init --no-reload` 把 defaults.py 中的默认值写入 DB

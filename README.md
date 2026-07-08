@@ -14,6 +14,7 @@
 iot_control_platform_release_version/
 ├── iot_control_platform/   # Django 后端（REST API + MQTT）
 ├── frontend/               # Vue 3 前端（监控仪表盘）
+├── mcp/                    # AI Agent 的标准 MCP 操作入口
 ├── hardware/               # 嵌入式固件（Wemos D1 / ESP8266）
 ├── docs/                   # 项目文档
 └── README.md               # 本文件
@@ -78,6 +79,7 @@ docker compose exec backend python manage.py createsuperuser
 | 部署 | [before_deploy](docs/deployment/before_deploy.md) · [Docker](docs/deployment/docker.md) · [非 Docker](docs/deployment/not_docker.md) |
 | 后端设计 | [Django 模型](docs/backend/backend_design/djange_models_design.md) · [MQTT 服务](docs/backend/backend_design/mqtt_service_design.md) · [自动化规则](docs/backend/backend_design/AutomationRules_design.md) · [Project 场景](docs/backend/backend_design/project_design.md) |
 | 使用指南 | [Project 场景](docs/backend/backend_user_guide/project_guide.md) |
+| MCP 与 AI Agent | [MCP 基础、架构、运行与扩展指南](docs/mcp/mcp_agent_guide.md) |
 | 硬件 | [硬件设计](docs/hardware_code/hardware_code_design.md) · [嵌入式编写指南](docs/hardware_code/hardware_guide.md) |
 
 ---
@@ -88,4 +90,5 @@ docker compose exec backend python manage.py createsuperuser
 |-----|------|
 | [iot_control_platform](iot_control_platform/README.md) | Django 后端，设备/传感器/自动化 API |
 | [frontend](frontend/README.md) | Vue 前端，仪表盘与设备管理界面 |
+| [mcp](mcp/README.md) | AI Agent 读取、控制和管理 IoT 平台的 MCP 服务 |
 | [hardware](hardware/README.md) | Wemos D1 嵌入式固件与接线说明 |

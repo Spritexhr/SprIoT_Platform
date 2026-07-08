@@ -67,6 +67,14 @@
 
 ---
 
+## MCP 与 AI Agent
+
+| 文档 | 说明 |
+|------|------|
+| [MCP 与 AI Agent 集成指南](mcp/mcp_agent_guide.md) | 面向初学者讲解 MCP 基础、Host/Client/Server、工具调用生命周期，以及本项目 MCP 的架构、功能、安全、运行、调试和扩展方法 |
+
+---
+
 ## 仿真（虚拟传感器/设备）
 
 | 文档 | 说明 |
@@ -112,6 +120,8 @@ docs/
 │   └── hardware_guide.md
 ├── frontend/                        # 前端设计
 │   └── frontend_design.md
+├── mcp/                             # MCP 与 AI Agent
+│   └── mcp_agent_guide.md
 ├── simulation/                      # 仿真（虚拟传感器/设备）
 │   ├── simulation_guide.md
 │   └── testing_guide.md
