@@ -1,4 +1,4 @@
-"""IoT 控制平台 MCP Server：标准化发现、查询、控制和资源管理能力。"""
+"""SprIoT_Platform MCP Server：标准化发现、查询、控制和资源管理能力。"""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ confirmations = ConfirmationStore(
 )
 
 mcp = FastMCP(
-    "IoT Control Platform",
+    "SprIoT_Platform",
     instructions=(
-        "读取和管理 IoT 控制平台。写操作只能使用精确资源 ID；"
+        "读取和管理 SprIoT_Platform。写操作只能使用精确资源 ID；"
         "设备命令和删除操作必须先调用对应 preview 工具，再使用确认令牌执行。"
     ),
     host=settings.host,

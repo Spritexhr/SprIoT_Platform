@@ -112,6 +112,9 @@
         <el-button v-if="isStaff && selectedIds.length" class="selected-move-button" @click="moveDialogVisible = true">
           {{ ls.t('resourceFolders.moveSelected') }}（{{ selectedIds.length }}）
         </el-button>
+        <el-button v-if="isStaff && selectedIds.length" type="danger" plain :icon="Delete" @click="handleBulkDeleteDevices">
+          删除选中（{{ selectedIds.length }}）
+        </el-button>
         <el-button v-if="isStaff && devices.length" type="primary" :icon="Plus" @click="openAddDialog">{{ ls.t('devices.addDevice') }}</el-button>
       </div>
     </div>
@@ -162,7 +165,7 @@
             <span v-if="dragAnchorId === d.device_id && draggingIds.length > 1" class="drag-count-badge">
               {{ draggingIds.length }}
             </span>
-            <DeviceCard :device="d" @click="goDetail(d)" @delete="handleDeleteDevice" />
+            <DeviceCard :device="d" :show-delete="false" @click="goDetail(d)" />
           </div>
         </template>
       </draggable>
@@ -287,7 +290,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useLocaleStore } from '@/stores/locale'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Refresh } from '@element-plus/icons-vue'
+import { Delete, Plus, Search, Refresh } from '@element-plus/icons-vue'
 import { getDevices, createDevice, deleteDevice, getDeviceTypes, createDeviceType, updateDeviceType, deleteDeviceType, reorderDevices, bulkMoveDevices } from '@/api/devices'
 import draggable from 'vuedraggable'
 import DeviceCard from '@/components/devices/DeviceCard.vue'
@@ -606,6 +609,32 @@ async function handleDeleteDevice(device) {
   }
 }
 
+async function handleBulkDeleteDevices() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除已选中的 ${ids.length} 个设备对象？此操作不可恢复。`,
+      ls.t('common.deleteConfirmTitle'),
+      { confirmButtonText: ls.t('common.deleteConfirmOk'), cancelButtonText: ls.t('common.cancel'), type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  loading.value = true
+  try {
+    await Promise.all(ids.map((deviceId) => deleteDevice(deviceId)))
+    ElMessage.success(`已删除 ${ids.length} 个设备`)
+    selectedIds.value = []
+    await fetchDevices()
+    await folderBrowserRef.value?.refresh()
+  } catch {
+    ElMessage.error(ls.t('common.deleteFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
 // ==================== 添加设备 ====================
 const addDialogVisible = ref(false)
 const addSaving = ref(false)
@@ -699,8 +728,10 @@ onMounted(() => {
 .select-page-check { padding: 0 4px; }
 .resource-content { min-height: 140px; }
 .resource-card-shell { position: relative; min-width: 0; border-radius: var(--iot-radius-lg); transition: transform .18s, filter .18s; }
-.resource-selector { position: absolute; z-index: 6; top: 14px; left: 14px; margin: 0; padding: 3px; border-radius: 6px; background: color-mix(in srgb, var(--iot-bg-card) 90%, transparent); box-shadow: 0 1px 5px rgba(54,41,32,.1); }
-.resource-card-shell :deep(.device-card__header) { padding-left: 30px; }
+.resource-selector { position: absolute; z-index: 6; top: 16px; left: 16px; display: grid; width: 22px; height: 22px; margin: 0; padding: 0; place-items: center; border: 1px solid var(--iot-border-color-light); border-radius: 7px; background: color-mix(in srgb, var(--iot-bg-card) 96%, var(--iot-bg-page)); }
+.resource-selector :deep(.el-checkbox__input) { display: inline-flex; }
+.resource-selector :deep(.el-checkbox__label) { display: none; }
+.resource-card-shell :deep(.device-card__header) { padding-left: 34px; }
 .resource-card-shell.is-selected :deep(.device-card) { border-color: var(--iot-color-primary); background: linear-gradient(145deg, var(--iot-bg-card), var(--iot-color-primary-bg)); box-shadow: 0 0 0 2px var(--iot-color-primary-bg), var(--iot-shadow-md); }
 .resource-card-shell.is-selected::after { content: ''; position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--iot-color-primary) 42%, transparent); border-radius: var(--iot-radius-lg); pointer-events: none; }
 .resource-card-shell.is-drag-bundle { filter: saturate(1.04); }

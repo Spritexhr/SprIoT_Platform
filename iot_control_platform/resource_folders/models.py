@@ -3,11 +3,12 @@ from django.db import models
 
 
 class ResourceFolder(models.Model):
-    """传感器、设备管理页使用的独立目录树。"""
+    """传感器、设备、自动化规则管理页使用的独立目录树。"""
 
     SENSOR = "sensor"
     DEVICE = "device"
-    RESOURCE_TYPE_CHOICES = ((SENSOR, "传感器"), (DEVICE, "设备"))
+    AUTOMATION = "automation"
+    RESOURCE_TYPE_CHOICES = ((SENSOR, "传感器"), (DEVICE, "设备"), (AUTOMATION, "自动化规则"))
 
     name = models.CharField(max_length=100, verbose_name="文件夹名称")
     resource_type = models.CharField(

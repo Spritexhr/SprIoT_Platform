@@ -1,4 +1,4 @@
-# IoT 控制平台前端设计
+# SprIoT_Platform 前端设计
 
 本文档概括当前 Vue 前端的主要结构和数据流。Project 场景的具体操作见 [Project 使用指南](../backend/backend_user_guide/project_guide.md)。
 

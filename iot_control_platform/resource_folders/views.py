@@ -23,12 +23,13 @@ class ResourceFolderViewSet(viewsets.ModelViewSet):
             child_count=Count("children", distinct=True),
             sensor_count=Count("sensors", distinct=True),
             device_count=Count("devices", distinct=True),
+            automation_count=Count("automation_rules", distinct=True),
         )
         resource_type = self.request.query_params.get("resource_type")
         if resource_type:
             qs = qs.filter(resource_type=resource_type)
         return qs.annotate(
-            resource_count=F("sensor_count") + F("device_count")
+            resource_count=F("sensor_count") + F("device_count") + F("automation_count")
         ).order_by("sort_order", "id")
 
     def perform_create(self, serializer):
@@ -41,7 +42,12 @@ class ResourceFolderViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         folder = self.get_object()
-        if folder.children.exists() or folder.sensors.exists() or folder.devices.exists():
+        if (
+            folder.children.exists()
+            or folder.sensors.exists()
+            or folder.devices.exists()
+            or folder.automation_rules.exists()
+        ):
             return Response(
                 {"detail": "非空文件夹不能删除，请先移动其中的资源和子文件夹"},
                 status=status.HTTP_409_CONFLICT,

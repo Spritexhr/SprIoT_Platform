@@ -447,6 +447,10 @@ watch(() => props.sectionId, reload)
 .psr__resources { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .psr__unit { margin-left: 8px; color: var(--iot-text-secondary); }
 .psr-mobile-list { display: none; }
+.psr__table {
+  border-radius: var(--iot-radius-lg);
+  overflow: hidden;
+}
 .psr__table :deep(.el-table__header-wrapper) {
   margin-bottom: 8px;
   overflow: hidden;

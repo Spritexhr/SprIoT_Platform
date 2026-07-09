@@ -16,7 +16,7 @@
         >
           {{ device.is_online ? '在线' : '离线' }}
         </span>
-        <el-icon class="device-card__delete" @click.stop="$emit('delete', device)">
+        <el-icon v-if="showDelete" class="device-card__delete" @click.stop="$emit('delete', device)">
           <Close />
         </el-icon>
       </div>
@@ -56,6 +56,7 @@ import { Close } from '@element-plus/icons-vue'
 
 const props = defineProps({
   device: { type: Object, required: true },
+  showDelete: { type: Boolean, default: true },
 })
 
 defineEmits(['click', 'delete'])

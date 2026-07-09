@@ -112,6 +112,9 @@
         <el-button v-if="isStaff && selectedIds.length" class="selected-move-button" @click="moveDialogVisible = true">
           {{ ls.t('resourceFolders.moveSelected') }}（{{ selectedIds.length }}）
         </el-button>
+        <el-button v-if="isStaff && selectedIds.length" type="danger" plain :icon="Delete" @click="handleBulkDeleteSensors">
+          删除选中（{{ selectedIds.length }}）
+        </el-button>
         <el-button v-if="isStaff && sensors.length" type="primary" :icon="Plus" @click="openAddDialog">{{ ls.t('sensors.addSensor') }}</el-button>
       </div>
     </div>
@@ -162,7 +165,7 @@
             <span v-if="dragAnchorId === s.sensor_id && draggingIds.length > 1" class="drag-count-badge">
               {{ draggingIds.length }}
             </span>
-            <SensorCard :sensor="s" @click="goDetail(s)" @delete="handleDeleteSensor" />
+            <SensorCard :sensor="s" :show-delete="false" @click="goDetail(s)" />
           </div>
         </template>
       </draggable>
@@ -298,7 +301,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useLocaleStore } from '@/stores/locale'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Refresh } from '@element-plus/icons-vue'
+import { Delete, Plus, Search, Refresh } from '@element-plus/icons-vue'
 import { getSensors, createSensor, deleteSensor, getSensorTypes, createSensorType, updateSensorType, deleteSensorType, reorderSensors, bulkMoveSensors } from '@/api/sensors'
 import SensorCard from '@/components/sensors/SensorCard.vue'
 import ResourceFolderBrowser from '@/components/resources/ResourceFolderBrowser.vue'
@@ -621,6 +624,32 @@ async function handleDeleteSensor(sensor) {
   }
 }
 
+async function handleBulkDeleteSensors() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除已选中的 ${ids.length} 个传感器对象？此操作不可恢复。`,
+      ls.t('common.deleteConfirmTitle'),
+      { confirmButtonText: ls.t('common.deleteConfirmOk'), cancelButtonText: ls.t('common.cancel'), type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  loading.value = true
+  try {
+    await Promise.all(ids.map((sensorId) => deleteSensor(sensorId)))
+    ElMessage.success(`已删除 ${ids.length} 个传感器`)
+    selectedIds.value = []
+    await fetchSensors()
+    await folderBrowserRef.value?.refresh()
+  } catch {
+    ElMessage.error(ls.t('common.deleteFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
 // ==================== 添加传感器 ====================
 const addDialogVisible = ref(false)
 const addSaving = ref(false)
@@ -727,8 +756,10 @@ onMounted(() => {
 .select-page-check { padding: 0 4px; }
 .resource-content { min-height: 140px; }
 .resource-card-shell { position: relative; min-width: 0; border-radius: var(--iot-radius-lg); transition: transform .18s, filter .18s; }
-.resource-selector { position: absolute; z-index: 6; top: 14px; left: 14px; margin: 0; padding: 3px; border-radius: 6px; background: color-mix(in srgb, var(--iot-bg-card) 90%, transparent); box-shadow: 0 1px 5px rgba(54,41,32,.1); }
-.resource-card-shell :deep(.sensor-card__header) { padding-left: 30px; }
+.resource-selector { position: absolute; z-index: 6; top: 16px; left: 16px; display: grid; width: 22px; height: 22px; margin: 0; padding: 0; place-items: center; border: 1px solid var(--iot-border-color-light); border-radius: 7px; background: color-mix(in srgb, var(--iot-bg-card) 96%, var(--iot-bg-page)); }
+.resource-selector :deep(.el-checkbox__input) { display: inline-flex; }
+.resource-selector :deep(.el-checkbox__label) { display: none; }
+.resource-card-shell :deep(.sensor-card__header) { padding-left: 34px; }
 .resource-card-shell.is-selected :deep(.sensor-card) { border-color: var(--iot-color-primary); background: linear-gradient(145deg, var(--iot-bg-card), var(--iot-color-primary-bg)); box-shadow: 0 0 0 2px var(--iot-color-primary-bg), var(--iot-shadow-md); }
 .resource-card-shell.is-selected::after { content: ''; position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--iot-color-primary) 42%, transparent); border-radius: var(--iot-radius-lg); pointer-events: none; }
 .resource-card-shell.is-drag-bundle { filter: saturate(1.04); }

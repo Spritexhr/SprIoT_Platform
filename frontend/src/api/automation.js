@@ -27,6 +27,16 @@ export function deleteAutomationRule(id) {
   return request.delete(`/automation-rules/${id}/`)
 }
 
+/** 批量移动自动化规则到文件夹；folder 为 null 时移到未分类。 */
+export function bulkMoveAutomationRules(ruleIds, folder) {
+  return request.post('/automation-rules/bulk-move/', { rule_ids: ruleIds, folder })
+}
+
+/** 批量更新自动化规则显示顺序，order 是规则 id 数组。 */
+export function reorderAutomationRules(order, context = {}) {
+  return request.post('/automation-rules/reorder/', { order, ...context })
+}
+
 /** 手动执行规则 */
 export function executeAutomationRule(id) {
   return request.post(`/automation-rules/${id}/execute/`)

@@ -1,4 +1,4 @@
-# IoT 控制平台 — Claude 协作说明
+# SprIoT_Platform — Claude 协作说明
 
 ## 环境
 

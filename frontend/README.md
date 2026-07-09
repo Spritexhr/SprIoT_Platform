@@ -1,6 +1,6 @@
-# IoT 控制平台 - 前端
+# SprIoT_Platform - 前端
 
-基于 Vue 3 + Vite 构建的物联网控制平台前端，实现前后端分离架构。
+基于 Vue 3 + Vite 构建的 SprIoT_Platform 前端，实现前后端分离架构。
 
 ## 技术栈
 

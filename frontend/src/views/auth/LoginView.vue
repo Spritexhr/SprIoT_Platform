@@ -10,7 +10,7 @@
               stroke-linecap="round" fill="none" />
           </svg>
         </div>
-        <h1 class="auth-title">IoT 控制平台</h1>
+        <h1 class="auth-title">SprIoT_Platform</h1>
         <p class="auth-subtitle">登录您的账号以继续</p>
       </div>
 

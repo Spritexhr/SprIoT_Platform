@@ -158,8 +158,8 @@ router.beforeEach(async (to, from, next) => {
 // 路由后置守卫 - 更新页面标题
 router.afterEach((to) => {
   document.title = to.meta.title
-    ? `${to.meta.title} - IoT 控制平台`
-    : 'IoT 控制平台'
+    ? `${to.meta.title} - SprIoT_Platform`
+    : 'SprIoT_Platform'
 })
 
 export default router

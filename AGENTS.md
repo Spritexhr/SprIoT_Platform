@@ -1,4 +1,4 @@
-# IoT 控制平台 — Codex 协作说明
+# SprIoT_Platform — Codex 协作说明
 
 ## 环境
 

@@ -16,7 +16,7 @@
         >
           {{ sensor.is_online ? '在线' : '离线' }}
         </span>
-        <el-icon class="sensor-card__delete" @click.stop="$emit('delete', sensor)">
+        <el-icon v-if="showDelete" class="sensor-card__delete" @click.stop="$emit('delete', sensor)">
           <Close />
         </el-icon>
       </div>
@@ -56,6 +56,7 @@ import { Close } from '@element-plus/icons-vue'
 
 const props = defineProps({
   sensor: { type: Object, required: true },
+  showDelete: { type: Boolean, default: true },
 })
 
 defineEmits(['click', 'delete'])

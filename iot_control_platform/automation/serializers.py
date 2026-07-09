@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import AutomationRule, ControlScheme
 from .resources import normalize_device_list, validate_scoped_resources
+from resource_folders.models import ResourceFolder
 
 
 class AutomationRuleListSerializer(serializers.ModelSerializer):
@@ -9,6 +10,7 @@ class AutomationRuleListSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source='project.name', read_only=True, default='')
     project_code = serializers.CharField(source='project.code', read_only=True, default='')
     section_name = serializers.CharField(source='section.name', read_only=True, default='')
+    folder_info = serializers.SerializerMethodField()
 
     class Meta:
         model = AutomationRule
@@ -16,6 +18,7 @@ class AutomationRuleListSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'script_id',
             'project', 'project_name', 'project_code', 'section', 'section_name',
             'device_list', 'device_count',
+            'folder', 'folder_info', 'sort_order',
             'is_launched', 'poll_interval', 'process_status', 'error_message',
             'created_at', 'updated_at',
         ]
@@ -24,6 +27,11 @@ class AutomationRuleListSerializer(serializers.ModelSerializer):
 
     def get_device_count(self, obj):
         return obj.get_device_count()
+
+    def get_folder_info(self, obj):
+        if not obj.folder_id:
+            return None
+        return {'id': obj.folder_id, 'name': obj.folder.name, 'parent': obj.folder.parent_id}
 
 
 class AutomationRuleDetailSerializer(AutomationRuleListSerializer):
@@ -38,9 +46,14 @@ class AutomationRuleCreateUpdateSerializer(serializers.ModelSerializer):
         model = AutomationRule
         fields = [
             'id', 'name', 'description', 'script_id',
-            'project', 'section', 'script', 'device_list', 'poll_interval',
+            'project', 'section', 'script', 'device_list', 'poll_interval', 'folder',
         ]
         read_only_fields = ['id']
+
+    def validate_folder(self, value):
+        if value is not None and value.resource_type != ResourceFolder.AUTOMATION:
+            raise serializers.ValidationError('请选择自动化规则文件夹')
+        return value
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

@@ -471,6 +471,7 @@ watch(() => props.sectionId, () => { reload() })
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   font-weight: 600;
   color: var(--iot-text-primary);
 }
@@ -485,6 +486,18 @@ watch(() => props.sectionId, () => { reload() })
 .csv__table {
   border-radius: var(--iot-radius-lg);
   overflow: hidden;
+}
+
+.csv__table :deep(.el-table__header-wrapper) {
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid var(--iot-border-color-light);
+  border-radius: var(--iot-radius-base);
+}
+
+.csv__table :deep(.el-table__header-wrapper th.el-table__cell) {
+  border-bottom: 0;
+  background: var(--iot-bg-card);
 }
 
 .csv-cell-name {
@@ -566,6 +579,25 @@ watch(() => props.sectionId, () => { reload() })
   margin-left: 10px;
   font-size: 12px;
   color: var(--iot-text-placeholder);
+}
+
+@media (max-width: 760px) {
+  .csv__toolbar {
+    align-items: flex-start;
+  }
+
+  .csv__summary {
+    row-gap: 4px;
+  }
+
+  .csv__resource-count {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .csv__toolbar :deep(.el-button) {
+    width: 100%;
+  }
 }
 </style>
 

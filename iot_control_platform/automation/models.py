@@ -51,6 +51,15 @@ class AutomationRule(models.Model):
         verbose_name="脚本唯一ID",
         help_text="唯一标识，通过 execute_by_script_id('xxx') 调用执行，如 humidity_overflow_print、humidity_alert",
     )
+    folder = models.ForeignKey(
+        "resource_folders.ResourceFolder",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="automation_rules",
+        verbose_name="管理文件夹",
+    )
+    sort_order = models.IntegerField(default=0, db_index=True, verbose_name="显示顺序")
 
     # ========== 脚本 ==========
     script = models.TextField(
@@ -118,7 +127,7 @@ class AutomationRule(models.Model):
     class Meta:
         verbose_name = "自动化规则"
         verbose_name_plural = "自动化规则"
-        ordering = ['-created_at']
+        ordering = ['sort_order', '-created_at']
 
     def __str__(self):
         return self.name

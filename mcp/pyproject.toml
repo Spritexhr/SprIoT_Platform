@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "iot-control-platform-mcp"
 version = "0.1.0"
-description = "通过 MCP 安全读写 IoT 控制平台"
+description = "通过 MCP 安全读写 SprIoT_Platform"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27,<1",

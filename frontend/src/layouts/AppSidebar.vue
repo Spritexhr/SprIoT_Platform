@@ -13,7 +13,7 @@
         </svg>
       </div>
       <transition name="fade">
-        <span v-show="!collapsed" class="logo-text">IoT 控制平台</span>
+        <span v-show="!collapsed" class="logo-text">SprIoT_Platform</span>
       </transition>
     </div>
 

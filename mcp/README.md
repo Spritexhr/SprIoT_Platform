@@ -1,7 +1,7 @@
-# IoT Control Platform MCP
+# SprIoT_Platform MCP
 
 本目录是平台的 **AI 操作入口**。它实现标准 Model Context Protocol（MCP），让支持 MCP 的
-Agent 在明确权限和安全边界内发现、读取、控制和管理 IoT 资源。
+Agent 在明确权限和安全边界内发现、读取、控制和管理 SprIoT_Platform 资源。
 
 它不是 Django 插件，也不直接连接 MySQL、Redis 或 MQTT。所有业务操作统一经过 Django REST
 API，因此继续复用平台已有的认证、序列化校验、管理员权限与命令发送服务。
@@ -66,11 +66,15 @@ IOT_MCP_CONFIRMATION_SECRET=replace-with-a-long-random-secret
 MCP_HOST_PORT=48082
 ```
 
-然后启动可选 profile：
+然后在项目根目录构建并启动完整服务：
 
 ```bash
-docker compose --profile mcp up -d --build mcp
+docker compose build
+docker compose up -d
 ```
+
+`mcp` 已是默认 Compose 服务，不需要额外指定 profile。只想单独重建 MCP 时可以执行
+`docker compose up -d --build mcp`。
 
 本机 MCP 地址为 `http://127.0.0.1:48082/mcp`。可以使用 MCP Inspector 验证：
 

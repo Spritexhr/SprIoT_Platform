@@ -6,6 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from config.permissions import IsSuperuser
 from rest_framework.response import Response
+from django.db import transaction
 from django.db.models import Q
 from .models import AutomationRule, ControlScheme
 from .serializers import (
@@ -16,6 +17,7 @@ from .serializers import (
     ControlSchemeCreateUpdateSerializer,
 )
 from .resources import RuleResourceUnavailable, effective_device_list
+from resource_folders.models import ResourceFolder
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
     项目/房间脚本由工作人员管理；全局脚本仍仅超级用户可改。
     执行、启动、停止仅限工作人员；普通登录用户仅可查看。
     """
-    queryset = AutomationRule.objects.select_related('project', 'section').all()
+    queryset = AutomationRule.objects.select_related('project', 'section', 'folder').all()
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
@@ -59,7 +61,7 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
                 ).exists()
             permission = IsAdminUser() if is_project_rule else IsSuperuser()
             return [IsAuthenticated(), permission]
-        if self.action in ('execute', 'launch', 'stop'):
+        if self.action in ('execute', 'launch', 'stop', 'bulk_move', 'reorder'):
             return [IsAuthenticated(), IsAdminUser()]
         return [IsAuthenticated()]
 
@@ -86,6 +88,13 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
             qs = qs.filter(project_id=project)
         if section:
             qs = qs.filter(section_id=section)
+        folder = self.request.query_params.get('folder')
+        if folder == 'unfiled':
+            qs = qs.filter(folder__isnull=True)
+        elif folder:
+            if not folder.isdigit():
+                return qs.none()
+            qs = qs.filter(folder_id=int(folder), folder__resource_type=ResourceFolder.AUTOMATION)
         return qs
 
     def _ensure_resources_available(self, rule):
@@ -94,6 +103,73 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
         except RuleResourceUnavailable as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return None
+
+    @action(detail=False, methods=['post'], url_path='bulk-move')
+    def bulk_move(self, request):
+        rule_ids = request.data.get('rule_ids')
+        folder_id = request.data.get('folder')
+        if not isinstance(rule_ids, list) or not rule_ids or not all(isinstance(x, int) for x in rule_ids):
+            return Response({'detail': 'rule_ids 必须是非空整数数组'}, status=400)
+        folder = None
+        if folder_id is not None:
+            try:
+                folder = ResourceFolder.objects.get(pk=folder_id, resource_type=ResourceFolder.AUTOMATION)
+            except ResourceFolder.DoesNotExist:
+                return Response({'detail': '自动化规则文件夹不存在'}, status=400)
+        unique_ids = set(rule_ids)
+        qs = AutomationRule.objects.filter(id__in=unique_ids)
+        if qs.count() != len(unique_ids):
+            return Response({'detail': '包含不存在的自动化规则'}, status=400)
+        if qs.filter(project__isnull=True, section__isnull=True).exists() and not request.user.is_superuser:
+            return Response({'detail': '全局自动化规则仅超级用户可移动'}, status=status.HTTP_403_FORBIDDEN)
+        updated = qs.update(folder=folder)
+        return Response({'updated': updated})
+
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder(self, request):
+        order = request.data.get('order')
+        if not isinstance(order, list) or not all(isinstance(x, int) for x in order):
+            return Response({'detail': 'order 必须是规则 ID 整数数组'}, status=status.HTTP_400_BAD_REQUEST)
+        if (
+            AutomationRule.objects.filter(id__in=order, project__isnull=True, section__isnull=True).exists()
+            and not request.user.is_superuser
+        ):
+            return Response({'detail': '全局自动化规则仅超级用户可排序'}, status=status.HTTP_403_FORBIDDEN)
+
+        folder = request.data.get('folder')
+        page = request.data.get('page')
+        page_size = request.data.get('page_size')
+        scope = AutomationRule.objects.all()
+        if folder == 'unfiled' or folder is None:
+            scope = scope.filter(folder__isnull=True)
+        else:
+            scope = scope.filter(folder_id=folder, folder__resource_type=ResourceFolder.AUTOMATION)
+
+        if page is not None or page_size is not None:
+            try:
+                page = int(page)
+                page_size = int(page_size)
+                if page < 1 or page_size < 1 or page_size > 96:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return Response({'detail': 'page/page_size 参数无效'}, status=400)
+            all_ids = list(scope.order_by('sort_order', '-created_at').values_list('id', flat=True))
+            start = (page - 1) * page_size
+            page_ids = all_ids[start:start + page_size]
+            if len(order) != len(page_ids) or set(order) != set(page_ids):
+                return Response({'detail': '排序内容与当前页资源不一致，请刷新后重试'}, status=409)
+            all_ids[start:start + len(page_ids)] = order
+            rows = list(AutomationRule.objects.filter(id__in=all_ids))
+            row_map = {row.id: row for row in rows}
+            for index, rule_id in enumerate(all_ids, start=1):
+                row_map[rule_id].sort_order = index
+            with transaction.atomic():
+                AutomationRule.objects.bulk_update(rows, ['sort_order'])
+        else:
+            with transaction.atomic():
+                for index, rule_id in enumerate(order, start=1):
+                    AutomationRule.objects.filter(pk=rule_id).update(sort_order=index)
+        return Response({'updated': len(order)})
 
     @action(detail=True, methods=['post'], url_path='launch')
     def launch(self, request, pk=None):

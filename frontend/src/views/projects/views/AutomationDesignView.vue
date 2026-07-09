@@ -33,6 +33,13 @@ const activeMode = ref('scheme')
 
 <style scoped lang="scss">
 .adv { width: 100%; }
+.adv__tabs :deep(.el-tabs__content) {
+  width: 100%;
+  overflow: visible;
+}
+.adv__tabs :deep(.el-tab-pane) {
+  width: 100%;
+}
 :global(.pw__tabs.segmented-tabs .adv__tabs > .el-tabs__header) {
   display: inline-flex;
   align-self: flex-start;

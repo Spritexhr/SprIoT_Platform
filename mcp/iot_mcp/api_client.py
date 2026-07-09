@@ -112,7 +112,7 @@ class IoTAPIClient:
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 raise IoTAPIError(
-                    "无法连接 IoT 平台 API",
+                    "无法连接 SprIoT_Platform API",
                     code="platform_unavailable",
                     retryable=True,
                     details=str(exc),

@@ -1,6 +1,6 @@
-# 物联网控制平台 (IoT Control Platform)
+# SprIoT_Platform
 
-全栈物联网控制系统，支持传感器数据采集、执行器设备控制与自动化规则联动。
+SprIoT_Platform 是由 sprite 命名的全栈物联网控制系统，支持传感器数据采集、执行器设备控制与自动化规则联动。
 
 
 <img width="880" height="934" alt="屏幕截图 2026-02-21 181618" src="https://github.com/user-attachments/assets/a2931b9f-4f73-48ff-92f7-072fe772d982" />
@@ -90,5 +90,5 @@ docker compose exec backend python manage.py createsuperuser
 |-----|------|
 | [iot_control_platform](iot_control_platform/README.md) | Django 后端，设备/传感器/自动化 API |
 | [frontend](frontend/README.md) | Vue 前端，仪表盘与设备管理界面 |
-| [mcp](mcp/README.md) | AI Agent 读取、控制和管理 IoT 平台的 MCP 服务 |
+| [mcp](mcp/README.md) | AI Agent 读取、控制和管理 SprIoT_Platform 的 MCP 服务 |
 | [hardware](hardware/README.md) | Wemos D1 嵌入式固件与接线说明 |

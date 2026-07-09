@@ -11,7 +11,7 @@
           </svg>
         </div>
         <h1 class="auth-title">创建账号</h1>
-        <p class="auth-subtitle">注册 IoT 控制平台账号</p>
+        <p class="auth-subtitle">注册 SprIoT_Platform 账号</p>
       </div>
 
       <!-- 注册表单 -->

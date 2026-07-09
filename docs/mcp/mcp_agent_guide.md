@@ -929,8 +929,12 @@ MCP_HOST_PORT=48082
 
 ```bash
 cd /Users/xhr_mac/server/iot_control_platform
-docker compose --profile mcp up -d --build mcp
+docker compose build
+docker compose up -d
 ```
+
+`mcp` 是默认 Compose 服务，会与 backend、mqtt_runner 和 frontend 一起构建、启动。只修改了
+MCP 源码时，可以使用 `docker compose up -d --build mcp` 单独重建它。
 
 检查：
 
