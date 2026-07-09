@@ -1,11 +1,6 @@
 # SprIoT_Platform
 
-SprIoT_Platform 是由 sprite 命名的全栈物联网控制系统，支持传感器数据采集、执行器设备控制与自动化规则联动。
-
-
-<img width="880" height="934" alt="屏幕截图 2026-02-21 181618" src="https://github.com/user-attachments/assets/a2931b9f-4f73-48ff-92f7-072fe772d982" />
-
-
+SprIoT_Platform 是一个全栈物联网控制系统，支持传感器数据采集、执行器设备控制与自动化规则联动。
 ---
 
 ## 项目结构
