@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
@@ -30,7 +29,7 @@ class PointSample:
     tag: str  # 仪表位号，例如 TT-101
     value: Optional[float]
     unit: str = ""
-    ts: float = 0.0
+    ts: Optional[float] = None
     status: str = "normal"  # normal / warn_high / warn_low / alarm_high / alarm_low
     # 在线状态：与传感器管理页同一套口径（Sensor.computed_is_online，last_seen 3 分钟内）。
     # None 表示该点位没有对应的主模型 Sensor 可查（非鸭子类型 binding），前端按 ts 兜底判断。
@@ -137,7 +136,9 @@ def build_point_sample(
         tag=tag,
         value=value,
         unit=unit,
-        ts=float(timestamp) if timestamp else time.time(),
+        # 无历史数据的占位样本必须保留空时间戳；若伪造成当前时间，
+        # 前端按时间兜底时会把从未上报过数据的传感器误判为在线。
+        ts=float(timestamp) if timestamp is not None else None,
         status=classify_status(value, hi, lo, severity),
         is_online=is_online,
         last_seen=last_seen,

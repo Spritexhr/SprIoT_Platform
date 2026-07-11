@@ -155,10 +155,8 @@ async function loadControlTargets() {
       listControlSchemes(props.view.project, props.view.section),
     ])
     automationRules.value = asArray(rulesPayload)
-    // 此图元对应用户指定的标准 PI / PID；双位控制仍在原控制页管理。
-    controlSchemes.value = asArray(schemesPayload).filter(
-      (scheme) => scheme.control_type === 'pi' || scheme.control_type === 'pid',
-    )
+    // P&ID 控制器图元支持绑定全部结构化控制方案（双位 / PI / PID）。
+    controlSchemes.value = asArray(schemesPayload)
     store.upsertAutomationControls(automationRules.value, controlSchemes.value)
   } catch (error) {
     console.error('[diagram] 加载自动化图元候选项失败', error)

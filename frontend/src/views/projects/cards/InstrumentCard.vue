@@ -56,9 +56,11 @@ const description = computed(() => props.sample?.metadata?.description || '')
 const unit        = computed(() => props.sample?.unit || '')
 const status      = computed(() => props.sample?.status || 'normal')
 
-// 在线判断：最近 120s 内有数据视为在线；ts 为 0 或 null → 未知
-const ONLINE_THRESHOLD_MS = 120_000
+// 优先采用后端基于 Sensor.last_seen 计算的统一在线状态（3 分钟）；
+// 仅在没有主模型 Sensor 状态时，才按样本时间戳兜底。
+const ONLINE_THRESHOLD_MS = 180_000
 const isOnline = computed(() => {
+  if (typeof props.sample?.is_online === 'boolean') return props.sample.is_online
   const ts = props.sample?.ts
   if (!ts) return null
   return (props.now - ts * 1000) < ONLINE_THRESHOLD_MS
@@ -355,4 +357,3 @@ const valueStatusClass = computed(() => {
   }
 }
 </style>
-

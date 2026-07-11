@@ -109,7 +109,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item v-if="local.binding.kind === 'control_scheme'" label="选择 PI / PID 控制方案">
+        <el-form-item v-if="local.binding.kind === 'control_scheme'" label="选择控制方案">
           <el-select
             v-model="local.binding.id"
             filterable

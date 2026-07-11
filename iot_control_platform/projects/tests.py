@@ -127,6 +127,16 @@ class ProjectMemberDeleteProtectionTests(APITestCase):
         device = response.data["sections"][0]["devices"][0]
         self.assertEqual(device["data_fields"], ["valve_opening", "power_state"])
 
+    def test_snapshot_keeps_empty_sensor_timestamp_null_and_offline(self):
+        """从未上报数据的传感器不能因生成占位快照而被判为在线。"""
+        response = self.client.get(reverse("project-snapshot", args=[self.project.id]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sample = response.data["samples"][0]
+        self.assertIsNone(sample["value"])
+        self.assertIsNone(sample["ts"])
+        self.assertFalse(sample["is_online"])
+
     def test_control_scheme_status_is_published_for_diagram_node(self):
         with patch("services.realtime.dispatch.publish_control_scheme") as publish:
             with self.captureOnCommitCallbacks(execute=True):
