@@ -1,0 +1,36 @@
+{
+    "enable_sensor": {
+        "mqtt_message": {"command": "enable", "check_code": "123456"},
+        "description": "启动超声波传感器",
+        "params": [] 
+    },
+    "disable_sensor": {
+        "mqtt_message": {"command": "disable", "check_code": "123456"},
+        "description": "关闭超声波传感器",
+        "params": []
+    },
+    "set_data_interval": {
+        "mqtt_message": {
+            "command": "set_data_interval",
+            "interval": "{val}"
+        },
+        "description": "设置超声波数据采集和上报间隔，单位毫秒",
+        "params": ["val"]
+    },
+    "set_status_interval": {
+        "mqtt_message": {
+            "command": "set_status_interval",
+            "interval": "{val}"
+        },
+        "description": "设置状态传输(心跳)间隔，单位秒",
+        "params": ["val"]
+    },
+    "current_status": {
+        "mqtt_message": {
+            "command": "current_status",
+            "check_code": "123456"
+        },
+        "description": "查询当前状态",
+        "params": []
+    }
+}

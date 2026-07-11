@@ -1,0 +1,7 @@
+{
+  "sensor_id": "esp32_hcsr04_001",
+  "data": {
+    "distance_cm": 45.6
+  },
+  "timestamp": 1770733931
+}
