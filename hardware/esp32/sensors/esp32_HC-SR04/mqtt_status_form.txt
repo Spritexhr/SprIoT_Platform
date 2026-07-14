@@ -1,0 +1,35 @@
+{
+    "sensor_id": "esp32_hcsr04_001",
+    "event": "check_current_status" | "heartbeat" | "online" | "status_interval_updated" | "data_interval_updated" | "sensor_enabled" | "sensor_disabled",
+    "status": {
+        "is_enabled": true,
+        "samplingInterval": 5000,
+        "statusReportInterval": 10
+    },
+    "timestamp": 1770731525,
+    "check_code": "123456"
+}
+
+# 上线
+{
+    "sensor_id": "esp32_hcsr04_001",
+    "event": "online",
+    "status": {
+        "is_enabled": true,
+        "samplingInterval": 5000,
+        "statusReportInterval": 10
+    },
+    "timestamp": 1770731525
+}
+
+# 心跳（定期上报以证明在线，及上报配置）
+{
+    "sensor_id": "esp32_hcsr04_001",
+    "event": "heartbeat",
+    "status": {
+        "is_enabled": true,
+        "samplingInterval": 5000,
+        "statusReportInterval": 10
+    },
+    "timestamp": 1770731525
+}
