@@ -178,6 +178,13 @@
 
 | 版本 | 说明 |
 |------|------|
+| [0.11](update_notes/0.11_update_notes.md) | MQTT 单 runner、自动化执行隔离、查询性能、在线状态和部署可靠性加固 |
+| [0.10](update_notes/0.10_update_notes.md) | Project/场景原生化、四类视图、结构化控制与架构清理 |
+| [0.9](update_notes/0.9_update_notes.md) | 自动化规则引擎、脚本编辑器与设备选择器升级 |
+| [0.8](update_notes/0.8_update_notes.md) | Django Channels、Redis 与全平台 WebSocket 实时化 |
+| [0.7](update_notes/0.7_update_notes.md) | 平台配置统一、首次部署引导与 Token 主动续期 |
+| [0.6](update_notes/0.6_update_notes.md) | 在线状态、Admin 一致性与卡片排序修复 |
+| [0.5](update_notes/0.5_update_notes.md) | 插件系统与 data_viz 数据可视化插件 |
 | [0.4](update_notes/0.4_update_notes.md) | BaseCommandSendService 重构、MQTT 自动重连、安全配置、健康检查 |
 | [0.3](update_notes/0.3_update_notes.md) | 后台调度器、自动化规则轮询执行 |
 | [0.2](update_notes/0.2_update_notes.md) | MQTT 服务架构等 |
@@ -193,4 +200,4 @@
 | [嵌入式编写指南](hardware/hardware_guide.md) | 符合后端规范的固件编写 |
 
 ---
-*文档更新日期：2026年4月*
+*文档更新日期：2026年7月*

@@ -20,18 +20,38 @@ from sensors.models import Sensor, SensorData, SensorStatusCollection
 # 单次返回上限，避免一次性把 10w 行扔给前端图表
 DEFAULT_LIMIT = 2000
 MAX_LIMIT = 10000
+DEFAULT_WINDOW = timedelta(hours=24)
+MAX_WINDOW = timedelta(days=31)
 
 
-def _parse_dt(value, default):
-    """解析 ISO 时间，失败返回 default"""
-    if not value:
+def _parse_dt(value, default, param_name):
+    """严格解析 ISO 时间；只有参数缺省时才使用默认值。"""
+    if value is None:
         return default
-    dt = parse_datetime(value)
+    try:
+        dt = parse_datetime(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{param_name} 必须是合法的 ISO 8601 日期时间") from exc
     if dt is None:
-        return default
+        raise ValueError(f"{param_name} 必须是合法的 ISO 8601 日期时间")
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt)
     return dt
+
+
+def _parse_limit(value):
+    """严格解析返回上限，拒绝静默纠正无效或超限输入。"""
+    if value is None:
+        return DEFAULT_LIMIT
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        raise ValueError(f"limit 必须是 1 到 {MAX_LIMIT} 之间的整数")
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise ValueError(f"limit 必须是 1 到 {MAX_LIMIT} 之间的整数") from exc
+    if limit < 1 or limit > MAX_LIMIT:
+        raise ValueError(f"limit 必须是 1 到 {MAX_LIMIT} 之间的整数")
+    return limit
 
 
 def _truncate_window(qs, limit):
@@ -41,10 +61,10 @@ def _truncate_window(qs, limit):
     """
     total = qs.count()
     if total > limit:
-        rows = list(qs.order_by("-timestamp")[:limit])
+        rows = list(qs.order_by("-timestamp", "-pk")[:limit])
         rows.reverse()
     else:
-        rows = list(qs.order_by("timestamp"))
+        rows = list(qs.order_by("timestamp", "pk"))
     return rows, total
 
 
@@ -63,7 +83,11 @@ def sources(request):
     返回所有 sensor + device 及其可绘制字段（来自类型定义）
     """
     sensor_list = []
-    for s in Sensor.objects.select_related("sensor_type").all():
+    sensor_qs = Sensor.objects.select_related("sensor_type").only(
+        "sensor_id", "name", "location", "last_seen",
+        "sensor_type__name", "sensor_type__data_fields",
+    )
+    for s in sensor_qs:
         sensor_list.append({
             "id": s.sensor_id,
             "name": s.name,
@@ -75,13 +99,17 @@ def sources(request):
         })
 
     device_list = []
-    for d in Device.objects.select_related("device_type").all():
+    device_qs = Device.objects.select_related("device_type").only(
+        "device_id", "name", "location", "last_seen",
+        "device_type__name", "device_type__config_parameters",
+    )
+    for d in device_qs:
         device_list.append({
             "id": d.device_id,
             "name": d.name,
             "type": d.device_type.name if d.device_type else "",
             "config_parameters": d.device_type.config_parameters if d.device_type else [],
-            "is_online": d.is_online,
+            "is_online": d.computed_is_online,
             "last_seen": d.last_seen.isoformat() if d.last_seen else None,
             "location": d.location,
         })
@@ -109,16 +137,22 @@ def series(request):
         )
 
     now = timezone.now()
-    end = _parse_dt(request.GET.get("end"), now)
-    start = _parse_dt(request.GET.get("start"), end - timedelta(hours=24))
-    if start >= end:
-        return Response({"detail": "start 必须早于 end"}, status=400)
-
     try:
-        limit = int(request.GET.get("limit") or DEFAULT_LIMIT)
-    except ValueError:
-        limit = DEFAULT_LIMIT
-    limit = max(1, min(limit, MAX_LIMIT))
+        end = _parse_dt(request.GET.get("end"), now, "end")
+        start_raw = request.GET.get("start")
+        if start_raw is None:
+            start = end - DEFAULT_WINDOW
+        else:
+            start = _parse_dt(start_raw, None, "start")
+        limit = _parse_limit(request.GET.get("limit"))
+        window = end - start
+    except (ValueError, OverflowError) as exc:
+        return Response({"detail": str(exc) or "时间参数超出支持范围"}, status=400)
+
+    if window <= timedelta(0):
+        return Response({"detail": "start 必须早于 end"}, status=400)
+    if window > MAX_WINDOW:
+        return Response({"detail": "时间范围不能超过 31 天"}, status=400)
 
     if kind == "sensor":
         try:
@@ -135,7 +169,7 @@ def series(request):
         # 状态事件：上限单独限制，不与 data 共用
         events_qs = SensorStatusCollection.objects.filter(
             sensor=sensor, timestamp__gte=start, timestamp__lte=end
-        ).order_by("timestamp")[:limit]
+        ).order_by("timestamp", "pk")[:limit]
         events = [
             {"t": e.timestamp.isoformat(), "event": e.event_name, "data": e.data}
             for e in events_qs

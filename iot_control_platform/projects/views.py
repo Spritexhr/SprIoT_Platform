@@ -22,7 +22,9 @@ from datetime import timedelta
 
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
 from django.db.models.deletion import ProtectedError
+from django.db.models.functions import Coalesce
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -55,28 +57,89 @@ log = logging.getLogger(__name__)
 # 时序查询：单次返回上限，避免一次性把大量行扔给前端图表
 DEFAULT_SERIES_LIMIT = 2000
 MAX_SERIES_LIMIT = 10000
+DEFAULT_SERIES_WINDOW = timedelta(hours=24)
+MAX_SERIES_WINDOW = timedelta(days=31)
 
 
-def _parse_dt(value, default):
-    if not value:
+def _parse_dt(value, default, param_name):
+    """严格解析 ISO 时间；只有参数完全缺省时才使用默认值。"""
+    if value is None:
         return default
-    dt = parse_datetime(value)
+    try:
+        dt = parse_datetime(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{param_name} 必须是合法的 ISO 8601 日期时间") from exc
     if dt is None:
-        return default
+        raise ValueError(f"{param_name} 必须是合法的 ISO 8601 日期时间")
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt)
     return dt
+
+
+def _parse_series_limit(value):
+    if value is None:
+        return DEFAULT_SERIES_LIMIT
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        raise ValueError(f"limit 必须是 1 到 {MAX_SERIES_LIMIT} 之间的整数")
+    limit = int(value)
+    if limit < 1 or limit > MAX_SERIES_LIMIT:
+        raise ValueError(f"limit 必须是 1 到 {MAX_SERIES_LIMIT} 之间的整数")
+    return limit
 
 
 def _truncate_window(qs, limit):
     """时间窗内行数超 limit 时仅保留最近 limit 条，按时间升序返回。"""
     total = qs.count()
     if total > limit:
-        rows = list(qs.order_by("-timestamp")[:limit])
+        rows = list(qs.order_by("-timestamp", "-pk")[:limit])
         rows.reverse()
     else:
-        rows = list(qs.order_by("timestamp"))
+        rows = list(qs.order_by("timestamp", "pk"))
     return rows, total
+
+
+def _related_project_count(model):
+    """按 project_id 构造相关计数子查询，避免项目列表逐项 count。"""
+    return (
+        model.objects.filter(project_id=OuterRef("pk"))
+        .order_by()
+        .values("project_id")
+        .annotate(total=Count("pk"))
+        .values("total")
+    )
+
+
+def _with_project_counts(queryset):
+    return queryset.annotate(
+        _section_count=Coalesce(
+            Subquery(
+                _related_project_count(ProjectSection)[:1],
+                output_field=IntegerField(),
+            ),
+            Value(0),
+        ),
+        _sensor_count=Coalesce(
+            Subquery(
+                _related_project_count(ProjectSensorMember)[:1],
+                output_field=IntegerField(),
+            ),
+            Value(0),
+        ),
+        _device_count=Coalesce(
+            Subquery(
+                _related_project_count(ProjectDeviceMember)[:1],
+                output_field=IntegerField(),
+            ),
+            Value(0),
+        ),
+        _view_count=Coalesce(
+            Subquery(
+                _related_project_count(ProjectView)[:1],
+                output_field=IntegerField(),
+            ),
+            Value(0),
+        ),
+    )
 
 
 # ---------- 权限 ----------
@@ -94,16 +157,43 @@ class _AdminWritePermission:
 
 # ---------- 实时聚合 helper（snapshot/consumer 共用） ----------
 
+def _with_latest_sensor_data(queryset):
+    latest = SensorData.objects.filter(
+        sensor_id=OuterRef("sensor_id")
+    ).order_by("-received_at", "-pk")
+    return queryset.annotate(
+        _snapshot_data=Subquery(latest.values("data")[:1]),
+        _snapshot_timestamp=Subquery(latest.values("timestamp")[:1]),
+    )
+
+
+def _with_latest_device_status(queryset):
+    latest = DeviceStatusCollection.objects.filter(
+        device_id=OuterRef("device_id")
+    ).order_by("-received_at", "-pk")
+    return queryset.annotate(
+        _snapshot_data=Subquery(latest.values("data")[:1]),
+        _snapshot_event=Subquery(latest.values("event_name")[:1]),
+        _snapshot_timestamp=Subquery(latest.values("timestamp")[:1]),
+    )
+
+
 def _sensor_sample(member: ProjectSensorMember, project_code: str) -> dict:
     """从主模型最近一条 SensorData 现查，构造点位样本（结构与 PointSample.to_dict 对齐）。
     无历史数据时返回 value=None 的占位样本，前端显示「--」。"""
-    last = (
-        SensorData.objects.filter(sensor_id=member.sensor_id)
-        .order_by("-timestamp")
-        .first()
-    )
-    ts = last.timestamp.timestamp() if (last and last.timestamp) else None
-    data = last.data if (last and isinstance(last.data, dict)) else {}
+    if hasattr(member, "_snapshot_timestamp"):
+        timestamp = member._snapshot_timestamp
+        data = member._snapshot_data if isinstance(member._snapshot_data, dict) else {}
+    else:
+        # 兼容独立调用 helper 的场景；项目 snapshot 的成员查询会走批量注解。
+        last = (
+            SensorData.objects.filter(sensor_id=member.sensor_id)
+            .order_by("-received_at", "-pk")
+            .first()
+        )
+        timestamp = last.timestamp if last else None
+        data = last.data if (last and isinstance(last.data, dict)) else {}
+    ts = timestamp.timestamp() if timestamp else None
     sample = build_point_sample(
         member.point_id, data, ts, plugin_code=project_code, binding=member,
     )
@@ -114,16 +204,25 @@ def _device_state(member: ProjectDeviceMember) -> dict:
     """单个设备成员的当前状态：主模型最近一条 DeviceStatusCollection + 实时在线判定
     （Device.computed_is_online，跟设备管理页同口径）。"""
     device = member.device
-    last = device.status_records.order_by("-timestamp").first()
+    if hasattr(member, "_snapshot_timestamp"):
+        timestamp = member._snapshot_timestamp
+        data = member._snapshot_data
+        event = member._snapshot_event
+    else:
+        # 兼容独立调用 helper 的场景；项目 snapshot 的成员查询会走批量注解。
+        last = device.status_records.order_by("-received_at", "-pk").first()
+        timestamp = last.timestamp if last else None
+        data = last.data if last else None
+        event = last.event_name if last else ""
     return {
         "device_id": device.device_id,
         "name": device.name,
         "tag": member.tag or device.device_id,
-        "status": (last.data if last and isinstance(last.data, dict) else {}),
-        "event": (last.event_name if last else ""),
+        "status": data if isinstance(data, dict) else {},
+        "event": event or "",
         "is_online": bool(device.computed_is_online),
         "last_seen": device.last_seen.timestamp() if device.last_seen else None,
-        "ts": last.timestamp.timestamp() if (last and last.timestamp) else None,
+        "ts": timestamp.timestamp() if timestamp else None,
     }
 
 
@@ -170,11 +269,11 @@ def _build_layout(project: Project) -> dict:
 
 def build_project_snapshot(project: Project) -> dict:
     """项目当前实时快照：所有可见成员的最新值（现查 DB）。consumer 建连首发也复用此函数。"""
-    sensor_members = (
+    sensor_members = _with_latest_sensor_data(
         project.sensor_members.filter(is_visible=True)
         .select_related("sensor", "sensor__sensor_type")
     )
-    device_members = (
+    device_members = _with_latest_device_status(
         project.device_members.filter(is_visible=True)
         .select_related("device", "device__device_type")
     )
@@ -194,6 +293,12 @@ class ProjectViewSet(_AdminWritePermission, viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action in ("list", "retrieve", "update", "partial_update"):
+            queryset = _with_project_counts(queryset)
+        return queryset
+
     def perform_create(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
         serializer.save(created_by=user)
@@ -211,8 +316,28 @@ class ProjectViewSet(_AdminWritePermission, viewsets.ModelViewSet):
         project = self.get_object()
         sensors_qs = Sensor.objects.select_related("sensor_type").order_by("sort_order", "sensor_id")
         devices_qs = Device.objects.select_related("device_type").order_by("sort_order", "device_id")
-        ctx = {"project_id": project.id}
         section_id = request.query_params.get("section")
+
+        sensor_members = ProjectSensorMember.objects.filter(project_id=project.id)
+        device_members = ProjectDeviceMember.objects.filter(project_id=project.id)
+        if section_id:
+            sensor_members = sensor_members.filter(section_id=section_id)
+            device_members = device_members.filter(section_id=section_id)
+
+        bound_data_keys_by_sensor = defaultdict(list)
+        for sensor_id, data_key in sensor_members.order_by(
+            "sort_order", "id"
+        ).values_list("sensor_id", "data_key"):
+            bound_data_keys_by_sensor[sensor_id].append(data_key)
+        bound_device_ids = set(
+            device_members.values_list("device_id", flat=True)
+        )
+
+        ctx = {
+            "project_id": project.id,
+            "bound_data_keys_by_sensor": bound_data_keys_by_sensor,
+            "bound_device_ids": bound_device_ids,
+        }
         if section_id:
             ctx["section_id"] = section_id
         return Response({
@@ -224,27 +349,39 @@ class ProjectViewSet(_AdminWritePermission, viewsets.ModelViewSet):
     def series(self, request, pk=None):
         """某数据源在时间窗内的时序数据（供 timeseries 视图用，逻辑同 data_viz）。
         Query: kind=sensor|device, source_id, start, end, limit"""
+        project = self.get_object()
         kind = (request.GET.get("kind") or "").lower()
         source_id = request.GET.get("source_id") or ""
         if kind not in ("sensor", "device") or not source_id:
             return Response({"detail": "kind 必须为 sensor 或 device，且 source_id 必填"}, status=400)
 
         now = timezone.now()
-        end = _parse_dt(request.GET.get("end"), now)
-        start = _parse_dt(request.GET.get("start"), end - timedelta(hours=24))
-        if start >= end:
-            return Response({"detail": "start 必须早于 end"}, status=400)
         try:
-            limit = int(request.GET.get("limit") or DEFAULT_SERIES_LIMIT)
-        except ValueError:
-            limit = DEFAULT_SERIES_LIMIT
-        limit = max(1, min(limit, MAX_SERIES_LIMIT))
+            end = _parse_dt(request.GET.get("end"), now, "end")
+            start = _parse_dt(
+                request.GET.get("start"), end - DEFAULT_SERIES_WINDOW, "start"
+            )
+            limit = _parse_series_limit(request.GET.get("limit"))
+            window = end - start
+        except (ValueError, OverflowError) as exc:
+            return Response(
+                {"detail": str(exc) or "时间参数超出支持范围"}, status=400
+            )
+        if window <= timedelta(0):
+            return Response({"detail": "start 必须早于 end"}, status=400)
+        if window > MAX_SERIES_WINDOW:
+            return Response({"detail": "时间范围不能超过 31 天"}, status=400)
 
         if kind == "sensor":
             try:
-                sensor = Sensor.objects.select_related("sensor_type").get(sensor_id=source_id)
+                sensor = Sensor.objects.select_related("sensor_type").filter(
+                    project_members__project=project,
+                ).distinct().get(sensor_id=source_id)
             except Sensor.DoesNotExist:
-                return Response({"detail": f"传感器 {source_id} 不存在"}, status=404)
+                return Response(
+                    {"detail": f"传感器 {source_id} 不存在或未加入该项目"},
+                    status=404,
+                )
             rows, total = _truncate_window(
                 SensorData.objects.filter(sensor=sensor, timestamp__gte=start, timestamp__lte=end), limit,
             )
@@ -253,7 +390,7 @@ class ProjectViewSet(_AdminWritePermission, viewsets.ModelViewSet):
                 {"t": e.timestamp.isoformat(), "event": e.event_name, "data": e.data}
                 for e in SensorStatusCollection.objects.filter(
                     sensor=sensor, timestamp__gte=start, timestamp__lte=end,
-                ).order_by("timestamp")[:limit]
+                ).order_by("timestamp", "pk")[:limit]
             ]
             return Response({
                 "kind": "sensor", "source_id": sensor.sensor_id, "name": sensor.name,
@@ -264,9 +401,14 @@ class ProjectViewSet(_AdminWritePermission, viewsets.ModelViewSet):
             })
 
         try:
-            device = Device.objects.select_related("device_type").get(device_id=source_id)
+            device = Device.objects.select_related("device_type").filter(
+                project_members__project=project,
+            ).distinct().get(device_id=source_id)
         except Device.DoesNotExist:
-            return Response({"detail": f"设备 {source_id} 不存在"}, status=404)
+            return Response(
+                {"detail": f"设备 {source_id} 不存在或未加入该项目"},
+                status=404,
+            )
         rows, total = _truncate_window(
             DeviceStatusCollection.objects.filter(device=device, timestamp__gte=start, timestamp__lte=end), limit,
         )

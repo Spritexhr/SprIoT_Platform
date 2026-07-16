@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.utils import timezone
 from datetime import timedelta
 from .models import DeviceType, Device, DeviceStatusCollection
+from .online_status import get_device_offline_timeout
 from resource_folders.models import ResourceFolder
 from services.devices_service.device_command_send_service import device_command_send_service
 
@@ -23,8 +24,9 @@ class DeviceOnlineFilter(admin.SimpleListFilter):
         return (('1', '在线'), ('0', '离线'))
 
     def queryset(self, request, queryset):
-        # 默认心跳间隔 60s × 3 = 180s，与 Device.computed_is_online 保持一致
-        threshold = timezone.now() - timedelta(seconds=180)
+        threshold = timezone.now() - timedelta(
+            seconds=get_device_offline_timeout()
+        )
         if self.value() == '1':
             return queryset.filter(last_seen__gte=threshold)
         if self.value() == '0':
@@ -141,9 +143,9 @@ class DeviceAdmin(admin.ModelAdmin):
         """最新数据时间（优先用 last_seen，避免每行触发 N+1 查询）"""
         ts = obj.last_seen
         if not ts:
-            latest = obj.status_records.first()
+            latest = obj.status_records.order_by('-received_at', '-pk').first()
             if latest:
-                ts = latest.timestamp
+                ts = latest.received_at
         if ts:
             time_diff = timezone.now() - ts
             if time_diff.total_seconds() < 300:

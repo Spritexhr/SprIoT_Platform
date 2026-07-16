@@ -90,6 +90,7 @@
 
 | 版本 | 说明 |
 |------|------|
+| [0.11 更新日志](update_notes/0.11_update_notes.md) | MQTT 单 runner 与命令总线、自动化执行隔离、查询性能、在线状态和部署可靠性加固 |
 | [0.10 更新日志](update_notes/0.10_update_notes.md) | Project/场景原生化、四类视图、双位/PI/PID 控制、仿真平台与架构清理 |
 | [0.9 更新日志](update_notes/0.9_update_notes.md) | 自动化规则系统升级（引擎、SensorWrapper 扩展、CodeMirror 编辑器、设备选择器）；示例文件迁入 docs |
 | [0.8 更新日志](update_notes/0.8_update_notes.md) | 全平台实时化（Django Channels + Redis + WebSocket）；MQTT 客户端拆分独立进程；useWebSocket composable |
@@ -126,6 +127,7 @@ docs/
 │   ├── simulation_guide.md
 │   └── testing_guide.md
 └── update_notes/                    # 版本更新日志
+    ├── 0.11_update_notes.md
     ├── 0.10_update_notes.md
     ├── 0.9_update_notes.md
     ├── 0.8_update_notes.md

@@ -1,9 +1,7 @@
 import logging
-import io
-import contextlib
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated, IsAdminUser
 from config.permissions import IsSuperuser
 from rest_framework.response import Response
 from django.db import transaction
@@ -17,52 +15,47 @@ from .serializers import (
     ControlSchemeCreateUpdateSerializer,
 )
 from .resources import RuleResourceUnavailable, effective_device_list
+from .controllers import run_control_scheme_locked
+from .execution_policy import (
+    AutomationScriptExecutionDisabled,
+    SCRIPT_EXECUTION_DISABLED_CODE,
+    SCRIPT_EXECUTION_DISABLED_MESSAGE,
+    is_script_execution_enabled,
+)
+from .executor import (
+    AutomationExecutionLockUnavailable,
+    AutomationRuleBusy,
+    AutomationScriptExecutionTimeout,
+)
 from resource_folders.models import ResourceFolder
 
 logger = logging.getLogger(__name__)
 
 
-_CAPTURE_LOGGERS = ('automation', 'services.devices_service', 'services.sensors_service')
-
-
-class _LogCaptureHandler(logging.Handler):
-    """临时 handler，在规则执行期间捕获 INFO 及以上级别的应用日志"""
-
-    def __init__(self):
-        super().__init__(level=logging.INFO)
-        self.records: list[dict] = []
-
-    def emit(self, record):
-        self.records.append({
-            'level': record.levelname,
-            'message': f'[{record.name}] {record.getMessage()}',
-        })
+def _parse_step_send(value) -> bool:
+    """只接受 JSON 布尔值或规范 true/false 字符串，拒绝 Python truthiness。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == 'true':
+            return True
+        if normalized == 'false':
+            return False
+    raise ValueError('send 必须是布尔值 true 或 false')
 
 
 class AutomationRuleViewSet(viewsets.ModelViewSet):
     """
     自动化规则 CRUD API
-    项目/房间脚本由工作人员管理；全局脚本仍仅超级用户可改。
-    执行、启动、停止仅限工作人员；普通登录用户仅可查看。
+    所有写操作和执行相关动作仅限超级用户；普通登录用户仅可查看。
     """
     queryset = AutomationRule.objects.select_related('project', 'section', 'folder').all()
 
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy'):
-            # 项目脚本属于项目/场景配置：is_staff 可管理。
-            # 全局脚本不受项目资源隔离，保留 is_superuser 级别。
-            if self.action == 'create':
-                is_project_rule = bool(
-                    self.request.data.get('project') and self.request.data.get('section')
-                )
-            else:
-                is_project_rule = AutomationRule.objects.filter(
-                    pk=self.kwargs.get('pk'), project__isnull=False, section__isnull=False,
-                ).exists()
-            permission = IsAdminUser() if is_project_rule else IsSuperuser()
-            return [IsAuthenticated(), permission]
-        if self.action in ('execute', 'launch', 'stop', 'bulk_move', 'reorder'):
-            return [IsAuthenticated(), IsAdminUser()]
+        # 用 HTTP 安全方法作为边界，确保未来新增 POST action 不会意外退回到普通登录权限。
+        if self.request.method not in SAFE_METHODS:
+            return [IsAuthenticated(), IsSuperuser()]
         return [IsAuthenticated()]
 
     def get_serializer_class(self):
@@ -103,6 +96,18 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
         except RuleResourceUnavailable as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return None
+
+    @staticmethod
+    def _execution_disabled_response():
+        if is_script_execution_enabled():
+            return None
+        return Response(
+            {
+                'code': SCRIPT_EXECUTION_DISABLED_CODE,
+                'detail': SCRIPT_EXECUTION_DISABLED_MESSAGE,
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     @action(detail=False, methods=['post'], url_path='bulk-move')
     def bulk_move(self, request):
@@ -175,6 +180,9 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
     def launch(self, request, pk=None):
         """启动轮询：标记规则为持续轮询状态，可附带轮询间隔"""
         rule = self.get_object()
+        disabled_response = self._execution_disabled_response()
+        if disabled_response:
+            return disabled_response
         invalid_response = self._ensure_resources_available(rule)
         if invalid_response:
             return invalid_response
@@ -299,41 +307,64 @@ class AutomationRuleViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='execute')
     def execute(self, request, pk=None):
         """
-        手动执行一次规则，捕获 print 输出和 WARNING+ 日志并返回
+        手动执行一次规则，捕获 print 输出和 INFO+ 应用日志并返回
         """
         rule = self.get_object()
+        disabled_response = self._execution_disabled_response()
+        if disabled_response:
+            return disabled_response
         invalid_response = self._ensure_resources_available(rule)
         if invalid_response:
             return invalid_response
 
-        stdout_capture = io.StringIO()
-        log_capture = _LogCaptureHandler()
-        captured_loggers = [logging.getLogger(name) for name in _CAPTURE_LOGGERS]
-        for lg in captured_loggers:
-            lg.addHandler(log_capture)
         try:
-            with contextlib.redirect_stdout(stdout_capture):
-                success = rule.execute()
-            output = stdout_capture.getvalue()
+            execution = rule.execute_detailed()
             return Response({
-                'success': success,
-                'output': output,
-                'logs': log_capture.records,
+                'success': execution.success,
+                'output': execution.output,
+                'logs': list(execution.logs),
                 'rule_name': rule.name,
             })
-        except Exception as e:
-            logger.exception("执行自动化规则失败 [%s]", rule.name)
-            output = stdout_capture.getvalue()
+        except AutomationScriptExecutionDisabled as e:
+            return Response(
+                {'code': e.code, 'detail': str(e)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except AutomationScriptExecutionTimeout as e:
             return Response({
+                'code': e.code,
                 'success': False,
-                'output': output,
-                'logs': log_capture.records,
+                'output': e.output,
+                'logs': list(e.logs),
                 'error': str(e),
                 'rule_name': rule.name,
+            }, status=status.HTTP_504_GATEWAY_TIMEOUT)
+        except AutomationRuleBusy as e:
+            return Response({
+                'code': e.code,
+                'success': False,
+                'detail': str(e),
+                'rule_name': rule.name,
+            }, status=status.HTTP_409_CONFLICT)
+        except AutomationExecutionLockUnavailable as e:
+            return Response({
+                'code': e.code,
+                'success': False,
+                'detail': str(e),
+                'rule_name': rule.name,
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            logger.exception("执行自动化规则失败 [%s]", rule.name)
+            return Response({
+                'code': getattr(e, 'code', 'automation_script_execution_failed'),
+                'success': False,
+                'output': getattr(e, 'output', ''),
+                'logs': list(getattr(e, 'logs', ())),
+                'error': str(e),
+                'error_type': getattr(e, 'error_type', type(e).__name__),
+                'traceback': getattr(e, 'remote_traceback', ''),
+                'rule_name': rule.name,
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            for lg in captured_loggers:
-                lg.removeHandler(log_capture)
 
 
 class ControlSchemeViewSet(viewsets.ModelViewSet):
@@ -393,11 +424,33 @@ class ControlSchemeViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='step')
     def step(self, request, pk=None):
         """手动跑一拍控制（真实下发），返回算得的 PV / 输出 / 命令，供前端"试一下"。"""
-        from .controllers import run_control_scheme
         scheme = self.get_object()
-        send = request.data.get('send', True)
-        result = run_control_scheme(scheme, send=bool(send))
-        return Response({**result, 'scheme': ControlSchemeSerializer(scheme).data})
+        try:
+            send = _parse_step_send(request.data.get('send', True))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = run_control_scheme_locked(scheme.pk, send=send)
+        scheme.refresh_from_db()
+        payload = {**result, 'scheme': ControlSchemeSerializer(scheme).data}
+
+        # send=False 是显式试算（sent=None）；只有请求真实下发时才要求 sent=True。
+        if result.get('error') or (send and result.get('sent') is not True):
+            is_delivery_failure = (
+                result.get('error_code') == 'command_delivery_failed'
+                or (
+                    not result.get('error')
+                    and send
+                    and result.get('sent') is not True
+                )
+            )
+            response_status = (
+                status.HTTP_502_BAD_GATEWAY
+                if is_delivery_failure
+                else status.HTTP_409_CONFLICT
+            )
+            return Response(payload, status=response_status)
+        return Response(payload)
 
     @action(detail=False, methods=['get'], url_path='templates')
     def templates(self, request):

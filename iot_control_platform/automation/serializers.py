@@ -143,14 +143,34 @@ class ControlSchemeCreateUpdateSerializer(serializers.ModelSerializer):
         sensor_member = get('sensor_member')
         device_member = get('device_member')
 
-        # section 必须属于 project
-        if section is not None and project is not None and section.project_id != project.id:
-            raise serializers.ValidationError({'section': '该房间不属于此项目'})
-        # 绑定的成员必须属于同一项目
-        if sensor_member is not None and project is not None and sensor_member.project_id != project.id:
-            raise serializers.ValidationError({'sensor_member': '该传感器成员不属于此项目'})
-        if device_member is not None and project is not None and device_member.project_id != project.id:
-            raise serializers.ValidationError({'device_member': '该设备成员不属于此项目'})
+        # 四个作用域对象必须严格落在同一项目、同一房间。成员表同时保存 project / section，
+        # 因而两列都要核对，不能只检查 project 后容许跨房间绑定。
+        scope_errors = {}
+        if project is None:
+            scope_errors['project'] = '控制方案必须指定所属项目'
+        if section is None:
+            scope_errors['section'] = '控制方案必须指定所属房间'
+        elif project is not None and section.project_id != project.id:
+            scope_errors['section'] = '该房间不属于此项目'
+
+        if sensor_member is None:
+            scope_errors['sensor_member'] = '控制方案必须绑定被控量传感器'
+        elif project is not None and section is not None and (
+            sensor_member.project_id != project.id
+            or sensor_member.section_id != section.id
+        ):
+            scope_errors['sensor_member'] = '该传感器成员必须与控制方案属于同一项目和房间'
+
+        if device_member is None:
+            scope_errors['device_member'] = '控制方案必须绑定执行器设备'
+        elif project is not None and section is not None and (
+            device_member.project_id != project.id
+            or device_member.section_id != section.id
+        ):
+            scope_errors['device_member'] = '该设备成员必须与控制方案属于同一项目和房间'
+
+        if scope_errors:
+            raise serializers.ValidationError(scope_errors)
 
         # 命令映射必填校验
         control_type = get('control_type')

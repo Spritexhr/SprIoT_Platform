@@ -6,7 +6,7 @@
   .send_command(name, params) — 发送控制命令，不等待设备确认
   .send_command_with_make_sure(name, params, timeout=3)
                               — 发送控制命令并等待设备确认
-  .is_online                  — 是否在线（3 分钟内有数据上报）
+  .is_online                  — 是否在线（按平台 device_offline_timeout 判定）
   .model                      — 原始 Device 模型实例
 """
 import logging
@@ -40,7 +40,9 @@ class DeviceWrapper:
     def refresh(self) -> dict:
         """从数据库重新读取最新状态，刷新缓存并返回"""
         if self._device:
-            latest = self._device.status_records.order_by('-timestamp').first()
+            latest = self._device.status_records.order_by(
+                '-received_at', '-pk'
+            ).first()
             self._state_cache = latest.data if latest and latest.data else {}
         else:
             self._state_cache = {}
@@ -57,16 +59,26 @@ class DeviceWrapper:
         timeout: int = 3,
     ) -> Any:
         """发送控制命令，并等待设备回传 check_code 确认。"""
-        return self._send_command_with_make_sure_fn(name, params, timeout)
+        from services.mqtt_command_bus import (
+            MAX_DEVICE_ACK_TIMEOUT_SECONDS,
+            validate_command_timeout,
+        )
+
+        bounded_timeout = validate_command_timeout(
+            timeout,
+            name="timeout",
+            maximum=MAX_DEVICE_ACK_TIMEOUT_SECONDS,
+        )
+        return self._send_command_with_make_sure_fn(
+            name,
+            params,
+            bounded_timeout,
+        )
 
     @property
     def is_online(self) -> bool:
-        """是否在线：3 分钟内有数据上报"""
-        if not self._device or not self._device.last_seen:
-            return False
-        from django.utils import timezone
-        from datetime import timedelta
-        return (timezone.now() - self._device.last_seen) < timedelta(minutes=3)
+        """使用设备模型的统一运行时离线阈值。"""
+        return bool(self._device and self._device.computed_is_online)
 
 
 def _make_noop_send(device_id: str):

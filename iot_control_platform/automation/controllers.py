@@ -9,10 +9,25 @@
 - CONTROL_TEMPLATES：三套模板的参数 schema + 默认值，供前端表单与 templates 接口使用。
 """
 import logging
+import threading
 
+from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger('automation.controllers')
+
+
+class ControlSchemeExecutionError(RuntimeError):
+    """控制方案无法完成一拍计算或命令映射。"""
+
+
+class ControlCommandDeliveryError(ControlSchemeExecutionError):
+    """控制命令未能成功发布到 MQTT。"""
+
+
+# 进程内用固定数量的分片锁兜住 SQLite / 同进程线程；数据库行锁负责 MySQL
+# 多进程互斥。固定分片避免按方案数量永久增长锁表。
+_SCHEME_EXECUTION_LOCKS = tuple(threading.Lock() for _ in range(128))
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +106,7 @@ def _read_pv(scheme):
     member = scheme.sensor_member
     if not member or not member.sensor:
         return None
-    rec = member.sensor.data_records.order_by('-timestamp').first()
+    rec = member.sensor.data_records.order_by('-received_at', '-pk').first()
     if not rec or not isinstance(rec.data, dict):
         return None
     val = rec.data.get(scheme.pv_key)
@@ -169,6 +184,44 @@ def _resolve_command(scheme, output, dt, state):
     return cmd, {}, ns
 
 
+def _mark_scheme_error(
+    scheme,
+    *,
+    now,
+    message,
+    error_code,
+    pv=None,
+    output=None,
+    command=None,
+    cmd_params=None,
+    sent=False,
+):
+    """原子步骤失败后的统一停环与诊断结果。调用方应持有方案行锁。"""
+    rounded_output = round(float(output), 2) if output is not None else None
+    cmd_params = cmd_params or {}
+    scheme.status = 'error'
+    scheme.is_enabled = False
+    scheme.error_message = message
+    scheme.last_run_time = now
+    scheme.last_pv = pv
+    scheme.last_output = rounded_output
+    scheme.last_command = f"{command} {cmd_params}".strip() if command else ''
+    scheme.save(update_fields=[
+        'status', 'is_enabled', 'error_message', 'last_run_time',
+        'last_pv', 'last_output', 'last_command', 'updated_at',
+    ])
+    return {
+        'pv': pv,
+        'output': rounded_output,
+        'command': command,
+        'params': cmd_params,
+        'sent': sent,
+        'error': message,
+        'error_code': error_code,
+        'skipped': False,
+    }
+
+
 def run_control_scheme(scheme, send: bool = True) -> dict:
     """
     执行一拍控制并回写运行态。
@@ -177,10 +230,17 @@ def run_control_scheme(scheme, send: bool = True) -> dict:
         scheme: ControlScheme 实例
         send: 是否真正下发命令（手动"试一下"也默认 True，跑真实一拍）
     Returns:
-        dict: {pv, output, command, params, sent, error}
+        dict: {pv, output, command, params, sent, error, error_code, skipped}
+
+        sent=True  表示 MQTT 发布成功；sent=False 表示该拍失败；
+        sent=None 仅表示 send=False 的显式试算，避免把“未请求下发”和“下发失败”混为一谈。
     """
     now = timezone.now()
     state = scheme.runtime_state if isinstance(scheme.runtime_state, dict) else {}
+    pv = None
+    output = None
+    command = None
+    cmd_params = {}
 
     try:
         # 1. 读 PV
@@ -188,13 +248,13 @@ def run_control_scheme(scheme, send: bool = True) -> dict:
         if pv is None:
             # 读不到被控量就停环：闭环控制不应在"看不见"过程值时继续盲目驱动设备
             msg = f"无法读取被控量 PV（传感器无数据或字段 {scheme.pv_key} 缺失/非数值）"
-            scheme.status = 'error'
-            scheme.is_enabled = False
-            scheme.error_message = msg
-            scheme.last_run_time = now
-            scheme.save(update_fields=['status', 'is_enabled', 'error_message',
-                                       'last_run_time', 'updated_at'])
-            return {'pv': None, 'output': None, 'command': None, 'params': {}, 'sent': False, 'error': msg}
+            return _mark_scheme_error(
+                scheme,
+                now=now,
+                message=msg,
+                error_code='pv_unavailable',
+                sent=False,
+            )
 
         # 2. 时间步长 dt（用上一次执行时间推算，首拍/异常回落到控制周期）
         if scheme.last_run_time:
@@ -209,20 +269,30 @@ def run_control_scheme(scheme, send: bool = True) -> dict:
 
         # 4. 映射成设备命令
         command, cmd_params, state = _resolve_command(scheme, output, dt, state)
+        if not command:
+            raise ControlSchemeExecutionError('控制方案未配置可下发的设备命令')
 
         # 5. 下发
-        sent = False
-        if send and command:
+        sent = None
+        if send:
             from services.devices_service.device_command_send_service import (
                 device_command_send_service,
             )
             device_id = scheme.device_member.device.device_id
-            sent = device_command_send_service.send_command_with_make_sure(
-                object_id=device_id,
-                command_name=command,
-                params=cmd_params or {},
-                timeout=3,
-            )
+            try:
+                # 控制环按固定周期连续运行，不应为每个方案串行等待最多 3 秒 ACK；
+                # QoS 1 发布结果是本拍的同步边界，设备状态继续由既有实时链路回传。
+                sent = device_command_send_service.send_command(
+                    object_id=device_id,
+                    command_name=command,
+                    params=cmd_params or {},
+                )
+            except Exception as exc:  # 服务异常统一转换为可诊断的下发失败
+                raise ControlCommandDeliveryError(f'设备命令下发异常: {exc}') from exc
+            if sent is not True:
+                raise ControlCommandDeliveryError(
+                    f'设备命令下发失败: {device_id}/{command}'
+                )
 
         # 6. 回写运行态
         scheme.runtime_state = state
@@ -231,24 +301,73 @@ def run_control_scheme(scheme, send: bool = True) -> dict:
         scheme.last_command = f"{command} {cmd_params}".strip() if command else ''
         scheme.last_run_time = now
         scheme.error_message = ''
+        scheme.status = 'running' if scheme.is_enabled else 'idle'
         scheme.save(update_fields=[
             'runtime_state', 'last_pv', 'last_output', 'last_command',
-            'last_run_time', 'error_message', 'updated_at',
+            'last_run_time', 'error_message', 'status', 'updated_at',
         ])
         return {'pv': pv, 'output': scheme.last_output, 'command': command,
-                'params': cmd_params, 'sent': sent, 'error': None}
+                'params': cmd_params, 'sent': sent, 'error': None,
+                'error_code': None, 'skipped': False}
 
+    except ControlCommandDeliveryError as e:
+        logger.error("控制方案命令下发失败 [%s]: %s", scheme.name, e)
+        return _mark_scheme_error(
+            scheme,
+            now=now,
+            message=str(e),
+            error_code='command_delivery_failed',
+            pv=pv,
+            output=output,
+            command=command,
+            cmd_params=cmd_params,
+            sent=False,
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("控制方案执行异常 [%s]: %s", scheme.name, e)
-        scheme.status = 'error'
-        scheme.is_enabled = False
-        scheme.error_message = f"执行异常: {e}"
-        scheme.last_run_time = now
-        scheme.save(update_fields=[
-            'status', 'is_enabled', 'error_message', 'last_run_time', 'updated_at',
-        ])
-        return {'pv': None, 'output': None, 'command': None, 'params': {},
-                'sent': False, 'error': str(e)}
+        return _mark_scheme_error(
+            scheme,
+            now=now,
+            message=f"执行异常: {e}",
+            error_code='execution_failed',
+            pv=pv,
+            output=output,
+            command=command,
+            cmd_params=cmd_params,
+            sent=False,
+        )
+
+
+def run_control_scheme_locked(scheme_id, send: bool = True, *, due_at=None) -> dict:
+    """在进程锁 + 数据库行锁下执行同一方案的一拍。
+
+    scheduler 传入 due_at 后会在取得锁之后重新检查周期，避免它在等待手动拍
+    期间使用旧 last_run_time，随后紧接着重复下发。
+    """
+    from .models import ControlScheme
+
+    local_lock = _SCHEME_EXECUTION_LOCKS[hash(scheme_id) % len(_SCHEME_EXECUTION_LOCKS)]
+    with local_lock:
+        with transaction.atomic():
+            scheme = ControlScheme.objects.select_for_update().get(pk=scheme_id)
+            if due_at is not None:
+                is_due = scheme.is_enabled and scheme.status == 'running'
+                if is_due and scheme.last_run_time is not None:
+                    interval = max(1, scheme.sample_interval or 1)
+                    elapsed = (due_at - scheme.last_run_time).total_seconds()
+                    is_due = elapsed >= interval
+                if not is_due:
+                    return {
+                        'pv': scheme.last_pv,
+                        'output': scheme.last_output,
+                        'command': None,
+                        'params': {},
+                        'sent': None,
+                        'error': None,
+                        'error_code': None,
+                        'skipped': True,
+                    }
+            return run_control_scheme(scheme, send=send)
 
 
 # ---------------------------------------------------------------------------

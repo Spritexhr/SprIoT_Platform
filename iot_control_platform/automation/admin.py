@@ -2,9 +2,18 @@
 自动化规则管理后台
 基于 automation.models.AutomationRule，与 devices.Device、sensors.Sensor 对接
 """
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 from django.utils.html import format_html, mark_safe
 from .models import AutomationRule
+from .execution_policy import (
+    AutomationScriptExecutionDisabled,
+    SCRIPT_EXECUTION_DISABLED_MESSAGE,
+    ensure_script_execution_enabled,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @admin.register(AutomationRule)
@@ -40,7 +49,10 @@ class AutomationRuleAdmin(admin.ModelAdmin):
         }),
         ('脚本', {
             'fields': ('script',),
-            'description': 'devices 字典提供 current_state、Device 提供 send_command()。',
+            'description': (
+                '脚本与 Django 进程同权限运行，不是安全沙箱；仅可保存并执行受信任代码。'
+                'devices 字典提供 current_state、Device 提供 send_command()。'
+            ),
         }),
         ('时间信息', {
             'fields': ('created_at', 'updated_at'),
@@ -49,6 +61,15 @@ class AutomationRuleAdmin(admin.ModelAdmin):
     )
 
     actions = ['test_execute']
+
+    def has_add_permission(self, request):
+        return bool(request.user and request.user.is_superuser)
+
+    def has_change_permission(self, request, obj=None):
+        return bool(request.user and request.user.is_superuser)
+
+    def has_delete_permission(self, request, obj=None):
+        return bool(request.user and request.user.is_superuser)
 
     def process_status_display(self, obj):
         """轮询状态彩色指示器"""
@@ -135,12 +156,25 @@ class AutomationRuleAdmin(admin.ModelAdmin):
 
     def test_execute(self, request, queryset):
         """测试执行规则"""
+        if not request.user.is_superuser:
+            self.message_user(request, '仅超级用户可执行自动化脚本。', level=messages.ERROR)
+            return
+        try:
+            ensure_script_execution_enabled()
+        except AutomationScriptExecutionDisabled:
+            self.message_user(request, SCRIPT_EXECUTION_DISABLED_MESSAGE, level=messages.ERROR)
+            return
+
         success_count = 0
         fail_count = 0
         for rule in queryset:
-            if rule.execute():
-                success_count += 1
-            else:
+            try:
+                if rule.execute():
+                    success_count += 1
+                else:
+                    fail_count += 1
+            except Exception:
+                logger.exception("后台测试执行自动化规则失败 [%s]", rule.name)
                 fail_count += 1
         self.message_user(
             request,

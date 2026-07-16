@@ -17,6 +17,7 @@ from __future__ import annotations
 from channels.db import database_sync_to_async
 
 from services.realtime.consumers import _BaseAuthedConsumer
+from services.realtime.dispatch import g_project
 
 
 class ProjectStreamConsumer(_BaseAuthedConsumer):
@@ -27,7 +28,7 @@ class ProjectStreamConsumer(_BaseAuthedConsumer):
         return self.scope["url_route"]["kwargs"]["project_id"]
 
     def _compute_groups(self):
-        return [f"projects.{self._project_id()}", "devices.all"]
+        return [g_project(self._project_id()), "devices.all"]
 
     async def _send_initial(self):
         snap = await database_sync_to_async(self._build_snapshot)(self._project_id())

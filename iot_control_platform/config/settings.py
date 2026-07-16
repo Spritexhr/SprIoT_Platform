@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import math
 import os
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
@@ -116,17 +117,60 @@ ASGI_APPLICATION = "config.asgi.application"
 
 # Channels channel layer：跨 worker 广播必须用 Redis（InMemoryChannelLayer
 # 在 paho 后台线程 → consumer 异步线程跨线程场景下不稳定，开发期也强制 Redis）。
-_REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [_REDIS_URL],
+            "hosts": [REDIS_URL],
             "capacity": 1500,
             "expiry": 30,
         },
     }
 }
+
+# MQTT 跨进程命令总线（Redis Streams）。只有独立 mqtt_runner 持有
+# Paho client；ASGI worker 在 Redis 不可用时 fail closed，不回退为进程内直连。
+MQTT_BUS_PREFIX = os.environ.get("MQTT_BUS_PREFIX", "spr:iot:mqtt")
+MQTT_COMMAND_BROKER_ACK_TIMEOUT = float(
+    os.environ.get("MQTT_COMMAND_BROKER_ACK_TIMEOUT", "2")
+)
+if (
+    not math.isfinite(MQTT_COMMAND_BROKER_ACK_TIMEOUT)
+    or MQTT_COMMAND_BROKER_ACK_TIMEOUT < 0.1
+    or MQTT_COMMAND_BROKER_ACK_TIMEOUT > 30
+):
+    raise ImproperlyConfigured(
+        "MQTT_COMMAND_BROKER_ACK_TIMEOUT 必须在 0.1 到 30 秒之间"
+    )
+MQTT_COMMAND_RESULT_TTL = int(os.environ.get("MQTT_COMMAND_RESULT_TTL", "600"))
+MQTT_CHECK_CODE_TTL = int(os.environ.get("MQTT_CHECK_CODE_TTL", "120"))
+MQTT_RUNNER_STATUS_TTL = int(os.environ.get("MQTT_RUNNER_STATUS_TTL", "15"))
+MQTT_RUNNER_LEASE_TTL = int(os.environ.get("MQTT_RUNNER_LEASE_TTL", "20"))
+MQTT_DEAD_LETTER_MAXLEN = int(
+    os.environ.get("MQTT_DEAD_LETTER_MAXLEN", "10000")
+)
+MQTT_DEAD_LETTER_MAX_PAYLOAD_BYTES = int(
+    os.environ.get("MQTT_DEAD_LETTER_MAX_PAYLOAD_BYTES", str(64 * 1024))
+)
+MQTT_INBOUND_MAX_PAYLOAD_BYTES = int(
+    os.environ.get("MQTT_INBOUND_MAX_PAYLOAD_BYTES", str(256 * 1024))
+)
+if not 1 <= MQTT_DEAD_LETTER_MAX_PAYLOAD_BYTES <= 1024 * 1024:
+    raise ImproperlyConfigured(
+        "MQTT_DEAD_LETTER_MAX_PAYLOAD_BYTES 必须在 1 到 1048576 之间"
+    )
+if not 1 <= MQTT_INBOUND_MAX_PAYLOAD_BYTES <= 16 * 1024 * 1024:
+    raise ImproperlyConfigured(
+        "MQTT_INBOUND_MAX_PAYLOAD_BYTES 必须在 1 到 16777216 之间"
+    )
+MQTT_BUS_REDIS_CONNECT_TIMEOUT = float(
+    os.environ.get("MQTT_BUS_REDIS_CONNECT_TIMEOUT", "1")
+)
+# 必须大于默认 3 秒设备确认等待，否则 BLPOP 会被 socket timeout 提前打断。
+MQTT_BUS_REDIS_SOCKET_TIMEOUT = float(
+    os.environ.get("MQTT_BUS_REDIS_SOCKET_TIMEOUT", "10")
+)
 
 
 # Database
@@ -142,6 +186,10 @@ if os.environ.get("DB_USE_MYSQL", "").lower() in ("true", "1", "yes"):
             "PASSWORD": os.environ.get("DB_PASSWORD", ""),
             "HOST": os.environ.get("DB_HOST", "localhost"),
             "PORT": os.environ.get("DB_PORT", "3306"),
+            # 复用短时 MySQL 连接，避免每个 API/MQTT 回调重复握手；使用前先
+            # 健康探测，服务端 wait_timeout 关闭连接后可自动换新。
+            "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
             "OPTIONS": {
                 "charset": "utf8mb4",
                 "init_command": "SET sql_mode='STRICT_TRANS_TABLES', default_storage_engine=INNODB",
@@ -311,9 +359,43 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),                   # Authorization: Bearer <token>
 }
 
-# 自动化规则脚本允许导入的模块白名单
-# 仅允许导入可信模块，危险模块（os, subprocess, socket, sys 等）禁止引入
-# 格式：逗号分隔的模块名列表
+# 自定义 Python 自动化属于高风险能力：独立子进程可硬终止，但不是 OS 沙箱。
+# 只有完全信任超级用户且明确接受容器内代码执行风险时，才可通过环境变量开启。
+AUTOMATION_SCRIPT_EXECUTION_ENABLED = os.environ.get(
+    "AUTOMATION_SCRIPT_EXECUTION_ENABLED",
+    "False",
+).lower() in ("true", "1", "yes")
+
+# 自由脚本在独立 spawn 子进程中的单拍硬超时。配置错误直接阻止服务启动，
+# 不做静默纠正；上限避免一次脚本长期占住 scheduler / Web 请求。
+AUTOMATION_SCRIPT_TIMEOUT_MAX_SECONDS = 60.0
+_automation_timeout_raw = os.environ.get("AUTOMATION_SCRIPT_TIMEOUT_SECONDS", "10")
+try:
+    AUTOMATION_SCRIPT_TIMEOUT_SECONDS = float(_automation_timeout_raw)
+except (TypeError, ValueError) as _automation_timeout_error:
+    raise ImproperlyConfigured(
+        "AUTOMATION_SCRIPT_TIMEOUT_SECONDS 必须是数值"
+    ) from _automation_timeout_error
+if (
+    not math.isfinite(AUTOMATION_SCRIPT_TIMEOUT_SECONDS)
+    or AUTOMATION_SCRIPT_TIMEOUT_SECONDS <= 0
+    or AUTOMATION_SCRIPT_TIMEOUT_SECONDS > AUTOMATION_SCRIPT_TIMEOUT_MAX_SECONDS
+):
+    raise ImproperlyConfigured(
+        "AUTOMATION_SCRIPT_TIMEOUT_SECONDS 必须大于 0 且不超过 "
+        f"{AUTOMATION_SCRIPT_TIMEOUT_MAX_SECONDS:g} 秒"
+    )
+
+# 手动 API、Admin 与 scheduler 共享 Redis 单飞锁；同一规则只允许一个执行者。
+# Redis 不可用时执行器 fail closed，避免多 worker 重复运行自由 Python 脚本。
+AUTOMATION_SCRIPT_LOCK_PREFIX = os.environ.get(
+    "AUTOMATION_SCRIPT_LOCK_PREFIX",
+    "spr:iot:automation:execution",
+)
+
+# 自动化规则脚本允许导入的模块白名单。
+# 这只是开启脚本后的纵深防御，不是 Python 安全沙箱，不能替代进程/容器隔离。
+# 格式：逗号分隔的模块名列表。
 AUTOMATION_ALLOWED_IMPORTS = os.environ.get(
     "AUTOMATION_ALLOWED_IMPORTS",
     "time,datetime,math,random,json,re"

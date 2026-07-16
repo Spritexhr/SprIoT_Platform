@@ -73,15 +73,23 @@ class ProjectSerializer(serializers.ModelSerializer):
         ]
 
     def get_section_count(self, obj):
+        if hasattr(obj, "_section_count"):
+            return obj._section_count
         return obj.sections.count()
 
     def get_sensor_count(self, obj):
+        if hasattr(obj, "_sensor_count"):
+            return obj._sensor_count
         return obj.sensor_members.count()
 
     def get_device_count(self, obj):
+        if hasattr(obj, "_device_count"):
+            return obj._device_count
         return obj.device_members.count()
 
     def get_view_count(self, obj):
+        if hasattr(obj, "_view_count"):
+            return obj._view_count
         return obj.views.count()
 
 
@@ -201,6 +209,9 @@ class BindableSensorSerializer(serializers.ModelSerializer):
         return obj.sensor_type.data_fields if obj.sensor_type_id else []
 
     def get_bound_data_keys(self, obj):
+        bound_map = self.context.get("bound_data_keys_by_sensor")
+        if bound_map is not None:
+            return list(bound_map.get(obj.pk, ()))
         sid = self.context.get("section_id")
         pid = self.context.get("project_id")
         qs = obj.project_members
@@ -227,6 +238,9 @@ class BindableDeviceSerializer(serializers.ModelSerializer):
         return list(cmds.keys()) if isinstance(cmds, dict) else []
 
     def get_already_bound(self, obj):
+        bound_ids = self.context.get("bound_device_ids")
+        if bound_ids is not None:
+            return obj.pk in bound_ids
         sid = self.context.get("section_id")
         pid = self.context.get("project_id")
         qs = obj.project_members

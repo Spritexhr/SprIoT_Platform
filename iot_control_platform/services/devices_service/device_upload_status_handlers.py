@@ -7,9 +7,18 @@ MQTT设备状态接收解析程序
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
+from django.db import transaction
 from devices.models import Device, DeviceStatusCollection
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_command_ack(device_id: str, check_code: str) -> None:
+    try:
+        from services.mqtt_command_bus import get_mqtt_command_bus
+        get_mqtt_command_bus().resolve_check_code("device", device_id, check_code)
+    except Exception as exc:
+        logger.error("设备命令 ACK 写入 Redis 失败: %s", exc)
 
 
 def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
@@ -23,9 +32,6 @@ def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
 
         device_id = payload['device_id']
         check_code = (str(payload.get('check_code') or '')).strip() or None
-        if check_code:
-            from .device_command_send_service import device_command_send_service
-            device_command_send_service.verify_check_code(device_id, check_code)
 
         device = _get_device(device_id)
         if not device:
@@ -42,6 +48,10 @@ def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
 
         if success:
             logger.info(f"✓ 设备状态保存成功 - {device_id}, event={event_name}, 状态: {status_to_save}")
+            if check_code:
+                transaction.on_commit(
+                    lambda: _resolve_command_ack(device_id, check_code)
+                )
         return success
 
     except Exception as e:

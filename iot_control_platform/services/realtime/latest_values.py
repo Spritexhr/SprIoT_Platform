@@ -42,25 +42,29 @@ class PointSample:
 
 
 class LatestValuesCache:
-    """线程安全的最新点位值缓存，按 sensor_id 索引。"""
+    """线程安全的最新点位值缓存，按 (plugin_code, sensor_id) 复合键索引。"""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._values: Dict[str, PointSample] = {}
+        self._values: Dict[tuple[str, str], PointSample] = {}
 
     def update(self, sample: PointSample) -> None:
         with self._lock:
-            self._values[sample.sensor_id] = sample
+            self._values[(sample.plugin_code, sample.sensor_id)] = sample
 
-    def get(self, sensor_id: str) -> Optional[PointSample]:
+    def get(self, plugin_code: str, sensor_id: str) -> Optional[PointSample]:
         with self._lock:
-            return self._values.get(sensor_id)
+            return self._values.get((plugin_code, sensor_id))
 
     def snapshot(self, plugin_code: Optional[str] = None) -> List[PointSample]:
         with self._lock:
             if plugin_code is None:
                 return list(self._values.values())
-            return [s for s in self._values.values() if s.plugin_code == plugin_code]
+            return [
+                sample
+                for (code, _sensor_id), sample in self._values.items()
+                if code == plugin_code
+            ]
 
     def clear(self) -> None:
         with self._lock:
@@ -165,7 +169,8 @@ def ingest_sensor_data(
     """
     构造 PointSample → 写全局缓存 → 广播到 plugins.{plugin_code} group。
     插件层（如 EB）使用；projects 层不走此函数（用 build_point_sample + 自有缓存/广播，
-    避免与插件共享全局缓存按 point_id 互相覆盖）。
+    避免混用不同的快照生命周期）。同一 sensor_id 可被多个插件独立缓存，
+    复合键 (plugin_code, sensor_id) 不会互相覆盖。
     """
     sample = build_point_sample(
         sensor_id, data, timestamp, plugin_code=plugin_code, binding=binding,

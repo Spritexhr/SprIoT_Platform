@@ -5,6 +5,8 @@
 """
 from django.db import models
 
+from .execution_policy import ensure_script_execution_enabled
+
 
 PROCESS_STATUS_CHOICES = [
     ('idle', '未启动'),
@@ -154,20 +156,28 @@ class AutomationRule(models.Model):
         return ", ".join(parts)
 
     def execute(self):
-        """执行脚本，返回 True/False"""
-        try:
-            from automation.engine import execute_rule
-            return execute_rule(self)
-        except Exception:
-            return False
+        """在独立限时子进程执行脚本；异常向调用方传播。"""
+        ensure_script_execution_enabled()
+        from automation.executor import execute_rule_with_timeout
+        return execute_rule_with_timeout(self.pk, using=self._state.db or 'default')
+
+    def execute_detailed(self):
+        """独立限时执行，并返回手动 API 所需的 stdout / 日志。"""
+        ensure_script_execution_enabled()
+        from automation.executor import execute_rule_with_timeout_details
+        return execute_rule_with_timeout_details(
+            self.pk,
+            using=self._state.db or 'default',
+        )
 
     @classmethod
     def execute_by_script_id(cls, script_id: str):
         """
         按脚本唯一ID执行规则。
         Returns:
-            bool: 执行成功返回 True，否则 False（未找到规则或执行失败）
+            bool: loop() 的布尔结果；未找到规则返回 False，脚本异常向调用方传播
         """
+        ensure_script_execution_enabled()
         try:
             rule = cls.objects.get(script_id=script_id)
             return rule.execute()
@@ -182,6 +192,7 @@ class AutomationRule(models.Model):
             script_id: 脚本唯一ID
             interval_seconds: 轮询间隔（秒），默认 30
         """
+        ensure_script_execution_enabled()
         import time
         try:
             rule = cls.objects.get(script_id=script_id)

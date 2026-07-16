@@ -17,33 +17,26 @@ import logging
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
-from platform_settings.defaults import DEFAULT_CONFIGS, get_meta
+from platform_settings.defaults import (
+    DEFAULT_CONFIGS,
+    ConfigValidationError,
+    coerce_config_value,
+    get_meta,
+    validate_config_value,
+)
 from platform_settings.models import PlatformConfig
 
 logger = logging.getLogger("platform_settings")
 
 
-def _coerce(raw: str, default: Any) -> Any:
-    """按 default 的类型把字符串转成对应 Python 类型"""
-    if isinstance(default, bool):
-        return str(raw).lower() in ("true", "1", "yes", "y", "on")
-    if isinstance(default, int):
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            raise CommandError(f"期望整数，得到: {raw!r}")
-    if isinstance(default, float):
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            raise CommandError(f"期望浮点数，得到: {raw!r}")
-    if isinstance(default, (list, dict)):
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise CommandError(f"期望 JSON {type(default).__name__}: {e}")
-    return raw
+def _coerce(key: str, raw: str) -> Any:
+    """CLI 文本转换也复用 defaults.py 的统一类型与范围规则。"""
+    try:
+        return coerce_config_value(key, raw)
+    except ConfigValidationError as exc:
+        raise CommandError(str(exc)) from exc
 
 
 def _format_value(value: Any, secret: bool = False) -> str:
@@ -57,6 +50,10 @@ def _format_value(value: Any, secret: bool = False) -> str:
 
 def _upsert(key: str, value: Any, meta: dict) -> str:
     """写入或更新一条 PlatformConfig，返回 'created' / 'updated' / 'unchanged'"""
+    try:
+        value = validate_config_value(key, value)
+    except ConfigValidationError as exc:
+        raise CommandError(str(exc)) from exc
     obj, created = PlatformConfig.objects.get_or_create(
         key=key,
         defaults={
@@ -77,20 +74,19 @@ def _upsert(key: str, value: Any, meta: dict) -> str:
 
 
 def _trigger_reload(stdout) -> None:
-    """直接调用 reload 逻辑（不走 HTTP），让 MQTT 等服务重连"""
+    """通过 Redis control stream 通知唯一 mqtt_runner 应用最新配置。"""
     try:
-        from services.mqtt_service import mqtt_service
-        from sensors.apps import SensorsConfig
+        from services.mqtt_command_bus import get_mqtt_command_bus
 
-        if SensorsConfig.mqtt_service_started and mqtt_service.client:
-            ok = mqtt_service.reconnect(timeout=5)
-            stdout.write(
-                f"  MQTT: {'reconnected' if ok else 'reconnect_failed'}"
-            )
-        else:
-            stdout.write("  MQTT: not_running (启动后会用最新配置连接)")
+        bus = get_mqtt_command_bus()
+        request_id = bus.enqueue_reload()
+        result = bus.wait_result(request_id, timeout=2.5)
+        stdout.write(
+            f"  MQTT: {result.get('status', 'queued')} request_id={request_id}"
+        )
     except Exception as e:
-        stdout.write(f"  MQTT: reload skipped ({e})")
+        # 配置已经写入数据库；runner 还有 30 秒指纹轮询作为漏通知补偿。
+        stdout.write(f"  MQTT: reload enqueue failed ({e})")
         logger.warning(f"configure reload 异常: {e}")
 
 
@@ -222,7 +218,8 @@ class Command(BaseCommand):
             _print_banner(self.stdout, self.style)
 
     def _handle_set_unset(self, set_pairs: list, unset_keys: list) -> None:
-        """处理 --set / --unset"""
+        """处理 --set / --unset；全部校验通过后才原子写库。"""
+        pending = []
         for pair in set_pairs:
             if "=" not in pair:
                 raise CommandError(f"--set 格式错误，需 KEY=VALUE: {pair!r}")
@@ -234,20 +231,30 @@ class Command(BaseCommand):
                     f"未知配置项: {key!r}。可用 key: "
                     f"{', '.join(c['key'] for c in DEFAULT_CONFIGS)}"
                 )
-            value = _coerce(raw, meta["default"])
-            result = _upsert(key, value, meta)
-            self.stdout.write(self.style.SUCCESS(
-                f"  [{result}] {key} = {_format_value(value, meta.get('secret', False))}"
-            ))
+            pending.append((key, _coerce(key, raw), meta, False))
 
-        for key in unset_keys:
+        for raw_key in unset_keys:
+            key = raw_key.strip()
             meta = get_meta(key)
             if not meta:
                 raise CommandError(f"未知配置项: {key!r}")
-            result = _upsert(key, meta["default"], meta)
-            self.stdout.write(self.style.WARNING(
-                f"  [{result}] {key} = {_format_value(meta['default'], meta.get('secret', False))} (重置为默认)"
-            ))
+            pending.append((key, validate_config_value(key, meta["default"]), meta, True))
+
+        outputs = []
+        with transaction.atomic():
+            for key, value, meta, is_unset in pending:
+                result = _upsert(key, value, meta)
+                outputs.append((key, value, meta, is_unset, result))
+
+        for key, value, meta, is_unset, result in outputs:
+            text = (
+                f"  [{result}] {key} = "
+                f"{_format_value(value, meta.get('secret', False))}"
+            )
+            if is_unset:
+                self.stdout.write(self.style.WARNING(f"{text} (重置为默认)"))
+            else:
+                self.stdout.write(self.style.SUCCESS(text))
 
     def _handle_wizard(self) -> None:
         """交互式 wizard：按 DEFAULT_CONFIGS 顺序询问，回车保留当前值"""
@@ -286,7 +293,7 @@ class Command(BaseCommand):
                 continue
 
             try:
-                value = _coerce(raw, default)
+                value = _coerce(key, raw)
             except CommandError as e:
                 self.stdout.write(self.style.ERROR(f"    × {e}, 保留原值"))
                 continue

@@ -68,7 +68,7 @@ docker compose exec backend python manage.py createsuperuser
 
 | 类别 | 文档 |
 |-----|------|
-| GitHub 发布清单 | [docs/GITHUB_RELEASE_CHECKLIST.md](docs/GITHUB_RELEASE_CHECKLIST.md) |
+| 0.11 更新日志 | [docs/update_notes/0.11_update_notes.md](docs/update_notes/0.11_update_notes.md) |
 | 项目概述 | [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md) |
 | 文档中心 | [docs/README.md](docs/README.md) |
 | 部署 | [before_deploy](docs/deployment/before_deploy.md) · [Docker](docs/deployment/docker.md) · [非 Docker](docs/deployment/not_docker.md) |

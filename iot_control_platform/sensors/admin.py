@@ -162,9 +162,9 @@ class SensorAdmin(admin.ModelAdmin):
         """最新数据时间（基于 last_seen 或最新数据记录）"""
         ts = obj.last_seen
         if not ts:
-            latest = obj.data_records.first()
+            latest = obj.data_records.order_by('-received_at', '-pk').first()
             if latest:
-                ts = latest.timestamp
+                ts = latest.received_at
         if ts:
             time_diff = timezone.now() - ts
             if time_diff.total_seconds() < 300:

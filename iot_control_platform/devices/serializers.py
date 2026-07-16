@@ -1,7 +1,9 @@
+from datetime import timedelta
+
 from rest_framework import serializers
 from django.utils import timezone
-from datetime import timedelta
 from .models import DeviceType, Device, DeviceStatusCollection
+from .online_status import get_device_offline_timeout
 from sensors.serializers import normalize_commands_payload
 
 
@@ -59,14 +61,20 @@ class DeviceListSerializer(serializers.ModelSerializer):
         return {'id': obj.folder_id, 'name': obj.folder.name, 'parent': obj.folder.parent_id}
 
     def get_is_online(self, obj):
-        """根据 last_seen 和心跳间隔实时计算在线状态"""
-        if not obj.last_seen:
-            return False
-        timeout = timedelta(seconds=obj.get_heartbeat_interval() * 3)
-        return (timezone.now() - obj.last_seen) < timeout
+        """使用平台统一的 device_offline_timeout 判定在线状态。"""
+        return bool(obj.computed_is_online)
 
     def get_latest_data(self, obj):
-        # 优先使用 prefetch 预取的数据，避免 N+1 查询
+        # API 列表/详情通过相关子查询注入，查询数不随资源数量增长。
+        if hasattr(obj, '_latest_status_timestamp'):
+            if obj._latest_status_timestamp is None:
+                return None
+            return {
+                'data': obj._latest_status_data,
+                'event_name': obj._latest_status_event_name,
+                'timestamp': obj._latest_status_timestamp,
+            }
+        # 兼容其它调用方显式提供的预取结果。
         if hasattr(obj, '_prefetched_objects_cache') and 'status_records' in obj._prefetched_objects_cache:
             records = obj._prefetched_objects_cache['status_records']
             if records:
@@ -77,7 +85,7 @@ class DeviceListSerializer(serializers.ModelSerializer):
                 }
             return None
         # 回退到查询
-        record = obj.status_records.order_by('-timestamp').first()
+        record = obj.status_records.order_by('-received_at', '-pk').first()
         if record:
             return {
                 'data': record.data,
@@ -99,7 +107,7 @@ class DeviceDetailSerializer(DeviceListSerializer):
         if hasattr(obj, '_data_count_24h'):
             return obj._data_count_24h
         start = timezone.now() - timedelta(hours=24)
-        return obj.status_records.filter(timestamp__gte=start).count()
+        return obj.status_records.filter(received_at__gte=start).count()
 
 
 class DeviceCreateUpdateSerializer(serializers.ModelSerializer):

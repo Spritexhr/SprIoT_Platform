@@ -7,9 +7,19 @@ MQTT传感器状态接收解析程序
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
+from django.db import transaction
 from sensors.models import Sensor, SensorStatusCollection
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_command_ack(sensor_id: str, check_code: str) -> None:
+    try:
+        from services.mqtt_command_bus import get_mqtt_command_bus
+        get_mqtt_command_bus().resolve_check_code("sensor", sensor_id, check_code)
+    except Exception as exc:
+        # 状态已经提交，Redis 短暂故障不应造成重复落库。
+        logger.error("传感器命令 ACK 写入 Redis 失败: %s", exc)
 
 
 def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
@@ -23,9 +33,6 @@ def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
 
         sensor_id = payload['sensor_id']
         check_code = (str(payload.get('check_code') or '')).strip() or None
-        if check_code:
-            from .sensor_command_send_service import sensor_command_send_service
-            sensor_command_send_service.verify_check_code(sensor_id, check_code)
 
         sensor = _get_sensor(sensor_id)
         if not sensor:
@@ -43,6 +50,12 @@ def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
 
         if success:
             logger.info(f"✓ 状态保存成功 - 传感器: {sensor_id}, 状态: {status_to_save}")
+            if check_code:
+                # ACK 只能在状态合法且成功落库后完成；Redis 映射使 web worker
+                # 与独立 mqtt_runner 之间不再依赖进程内 Event/dict。
+                transaction.on_commit(
+                    lambda: _resolve_command_ack(sensor_id, check_code)
+                )
         return success
 
     except Exception as e:

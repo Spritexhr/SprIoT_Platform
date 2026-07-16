@@ -22,8 +22,8 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from automation.models import AutomationRule, ControlScheme
-from devices.models import DeviceStatusCollection
-from sensors.models import SensorData, SensorStatusCollection
+from devices.models import Device, DeviceStatusCollection
+from sensors.models import Sensor, SensorData, SensorStatusCollection
 
 from . import dispatch
 
@@ -59,10 +59,10 @@ def on_sensor_data(sender, instance: SensorData, created: bool, **kwargs):
 def on_sensor_status(sender, instance: SensorStatusCollection, created: bool, **kwargs):
     if not created:
         return
-    sensor = instance.sensor
+    # 父对象先于记录写入更新；重新查询可避免并发上报时使用旧的关联对象缓存。
+    sensor = Sensor.objects.only('sensor_id', 'is_online', 'last_seen').get(pk=instance.sensor_id)
     sensor_id = sensor.sensor_id
-    # SensorStatusCollection.save() 已经调用 update_last_seen 把 is_online/last_seen
-    # 同步到 sensor 对象上，所以这里读到的就是最新值
+    # SensorStatusCollection.save() 已在同一事务中更新在线状态。
     payload = {
         "sensor_id": sensor_id,
         "event": instance.event_name or "",
@@ -79,10 +79,10 @@ def on_sensor_status(sender, instance: SensorStatusCollection, created: bool, **
 def on_device_status(sender, instance: DeviceStatusCollection, created: bool, **kwargs):
     if not created:
         return
-    device = instance.device
+    # 父对象先于记录写入更新；重新查询保证广播的是数据库权威状态。
+    device = Device.objects.only('device_id', 'is_online', 'last_seen').get(pk=instance.device_id)
     device_id = device.device_id
-    # DeviceStatusCollection.save() 已经 update_heartbeat 把 is_online/last_seen
-    # 同步到 device 对象上
+    # DeviceStatusCollection.save() 已在同一事务中更新在线状态。
     payload = {
         "device_id": device_id,
         "event": instance.event_name or "",

@@ -9,10 +9,11 @@
 启用规则：
 - discover_plugins() 仅做文件系统扫描，不依赖数据库
 - enabled_plugin_names() 优先读 platform_settings.Plugin 表；
-  表不可用（首次 migrate 前）时回退到清单的 enabled 默认值
+  仅确认表尚未创建（首次 migrate 前）时回退到清单默认值，其余 DB 故障全部禁用
 """
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 PLUGINS_DIR = Path(__file__).resolve().parent
 MANIFEST_FILENAME = "plugin.json"
+PLUGIN_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
 
 @dataclass
@@ -49,7 +51,8 @@ class PluginMeta:
 def discover_plugins() -> list[PluginMeta]:
     """
     扫描 plugins/ 子目录，返回所有合法插件的清单
-    合法条件：目录名不以 _ 或 . 开头，且包含 plugin.json
+    合法条件：目录名是小写 ASCII 安全标识、包含 plugin.json，且清单 name
+    明确存在并与目录名完全一致。
     """
     plugins: list[PluginMeta] = []
     if not PLUGINS_DIR.exists():
@@ -69,15 +72,42 @@ def discover_plugins() -> list[PluginMeta]:
         except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"插件 {entry.name} 的 plugin.json 解析失败: {e}")
             continue
+        if not isinstance(data, dict):
+            logger.warning("插件 %s 的 plugin.json 顶层必须是对象", entry.name)
+            continue
+
+        manifest_name = data.get("name")
+        if (
+            not isinstance(manifest_name, str)
+            or manifest_name != entry.name
+            or PLUGIN_NAME_RE.fullmatch(manifest_name) is None
+        ):
+            logger.warning(
+                "忽略插件目录 %s：plugin.json name 必须与目录名一致，"
+                "且匹配 %s（当前为 %r）",
+                entry.name,
+                PLUGIN_NAME_RE.pattern,
+                manifest_name,
+            )
+            continue
+
+        enabled_raw = data.get("enabled", True)
+        if not isinstance(enabled_raw, bool):
+            logger.warning(
+                "忽略插件 %s：plugin.json enabled 必须是布尔值（当前为 %r）",
+                entry.name,
+                enabled_raw,
+            )
+            continue
 
         ws_module_raw = data.get("ws_module")
         ws_module = str(ws_module_raw) if isinstance(ws_module_raw, str) and ws_module_raw else None
         plugins.append(
             PluginMeta(
-                name=str(data.get("name") or entry.name),
+                name=manifest_name,
                 version=str(data.get("version") or "0.0.0"),
                 description=str(data.get("description") or ""),
-                enabled=bool(data.get("enabled", True)),
+                enabled=enabled_raw,
                 path=entry,
                 ws_module=ws_module,
             )
@@ -88,18 +118,44 @@ def discover_plugins() -> list[PluginMeta]:
 def enabled_plugin_names() -> set[str]:
     """
     返回当前启用的插件名集合
-    优先读 DB；DB 不可用时使用清单默认值
+    优先读 DB。仅在确认插件表尚未创建时使用清单默认值；连接失败、权限错误、
+    查询异常等运行期故障一律 fail closed（返回空集合），避免把 DB 中已禁用的
+    插件按 manifest 默认值误启。
     """
     discovered = discover_plugins()
     discovered_by_name = {p.name: p for p in discovered}
 
+    manifest_defaults = {p.name for p in discovered if p.enabled}
+
     try:
-        # 延迟导入：settings 加载阶段不要触发 ORM
+        # 延迟导入：settings 加载阶段不要触发 ORM。
+        from django.db import connections, router  # noqa: WPS433
         from platform_settings.models import Plugin  # noqa: WPS433
-        db_states = {p.name: p.enabled for p in Plugin.objects.all()}
+
+        database_alias = router.db_for_read(Plugin)
+        connection = connections[database_alias]
+        table_name = Plugin._meta.db_table
     except Exception:
-        # 表不存在 / DB 未就绪 / 应用未加载 - 回退到清单默认值
-        return {p.name for p in discovered if p.enabled}
+        logger.exception("读取插件启停状态前初始化 ORM 失败；所有插件保持禁用")
+        return set()
+
+    try:
+        table_names = connection.introspection.table_names()
+    except Exception:
+        logger.exception("检查插件登记表失败；所有插件保持禁用")
+        return set()
+
+    if table_name not in table_names:
+        logger.info("插件登记表 %s 尚未创建，临时采用 manifest 默认值", table_name)
+        return manifest_defaults
+
+    try:
+        db_states = dict(
+            Plugin.objects.using(database_alias).values_list("name", "enabled")
+        )
+    except Exception:
+        logger.exception("查询插件启停状态失败；所有插件保持禁用")
+        return set()
 
     enabled: set[str] = set()
     for name, meta in discovered_by_name.items():

@@ -26,7 +26,9 @@ Consumer 内必须有匹配的 broadcast_* handler：
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from typing import Any, Dict
 
 from asgiref.sync import async_to_sync
@@ -35,9 +37,55 @@ from channels.layers import get_channel_layer
 log = logging.getLogger(__name__)
 
 
+# Channels group 名仅允许 ASCII 字母/数字/点/横线/下划线，且长度必须小于 100。
+# 对本来就合法的历史 ID 保持原名；其余 ID 使用“可读片段 + 稳定哈希”，避免简单
+# 替换造成 a:b 与 a-b 等不同资源碰撞。consumer 应复用下方 g_* 函数生成同一名称。
+CHANNEL_GROUP_MAX_LENGTH = 100
+_CHANNEL_GROUP_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_CHANNEL_GROUP_INVALID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_GROUP_DIGEST_LENGTH = 20
+
+
+def make_resource_group(namespace: str, identifier: Any) -> str:
+    """为动态资源 ID 生成确定、合法且碰撞风险可控的 Channels group 名。"""
+    if (
+        not isinstance(namespace, str)
+        or not namespace
+        or _CHANNEL_GROUP_RE.fullmatch(namespace) is None
+    ):
+        raise ValueError(f"非法 group namespace: {namespace!r}")
+
+    prefix = f"{namespace}."
+    max_component_length = CHANNEL_GROUP_MAX_LENGTH - 1 - len(prefix)
+    if max_component_length < _GROUP_DIGEST_LENGTH:
+        raise ValueError(f"group namespace 过长: {namespace!r}")
+
+    raw = str(identifier)
+    candidate = f"{prefix}{raw}"
+    if (
+        raw
+        and len(candidate) < CHANNEL_GROUP_MAX_LENGTH
+        and _CHANNEL_GROUP_RE.fullmatch(candidate) is not None
+    ):
+        return candidate
+
+    digest_source = f"{namespace}\0{raw}".encode("utf-8", errors="surrogatepass")
+    digest = hashlib.sha256(digest_source).hexdigest()[:_GROUP_DIGEST_LENGTH]
+    hint = _CHANNEL_GROUP_INVALID_RE.sub("-", raw).strip("._-")
+    hint_budget = max_component_length - len(digest) - 1
+    trimmed_hint = hint[:max(0, hint_budget)].rstrip("._-")
+    component = f"{trimmed_hint}-{digest}" if trimmed_hint else digest
+    group = f"{prefix}{component}"
+
+    # 这里是开发期不变量，而不是运行期容错；若常量被改坏应尽早暴露。
+    if len(group) >= CHANNEL_GROUP_MAX_LENGTH or _CHANNEL_GROUP_RE.fullmatch(group) is None:
+        raise AssertionError(f"生成了非法 Channels group: {group!r}")
+    return group
+
+
 # ---- group 命名 ----
 def g_sensor_one(sensor_id: str) -> str:
-    return f"sensors.{sensor_id}"
+    return make_resource_group("sensors", sensor_id)
 
 
 def g_sensor_all() -> str:
@@ -45,7 +93,7 @@ def g_sensor_all() -> str:
 
 
 def g_device_one(device_id: str) -> str:
-    return f"devices.{device_id}"
+    return make_resource_group("devices", device_id)
 
 
 def g_device_all() -> str:
@@ -61,11 +109,11 @@ def g_mqtt_system() -> str:
 
 
 def g_plugin(plugin_code: str) -> str:
-    return f"plugins.{plugin_code}"
+    return make_resource_group("plugins", plugin_code)
 
 
 def g_project(project_id) -> str:
-    return f"projects.{project_id}"
+    return make_resource_group("projects", project_id)
 
 
 # ---- 同步桥 ----

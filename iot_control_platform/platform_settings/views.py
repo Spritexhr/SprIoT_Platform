@@ -12,7 +12,12 @@ from rest_framework.response import Response
 from config.permissions import IsSuperuser
 from .defaults import DEFAULT_CONFIGS
 from .models import PlatformConfig, Plugin
-from .serializers import PlatformConfigSerializer, PluginSerializer
+from .serializers import (
+    SECRET_CONFIG_KEYS,
+    SECRET_MASK,
+    PlatformConfigSerializer,
+    PluginSerializer,
+)
 
 
 # 类型推断：value_type 字符串 -> 前端控件提示
@@ -38,13 +43,20 @@ def _infer_type(item: dict) -> str:
 class PlatformConfigViewSet(viewsets.ModelViewSet):
     """
     平台配置 CRUD
-    - 列表、详情：已认证用户可读
+    - 列表、详情：已认证用户可读非敏感配置；敏感配置仅超级用户可见且始终掩码
     - 创建、更新、删除：仅超级用户
     - reload：使配置修改生效（MQTT 重连等），无需重启服务
     """
     queryset = PlatformConfig.objects.all()
     serializer_class = PlatformConfigSerializer
     lookup_field = "key"
+
+    def get_queryset(self):
+        """普通用户只能查询非敏感配置；敏感配置对其表现为不存在。"""
+        queryset = super().get_queryset()
+        if not self.request.user.is_superuser:
+            queryset = queryset.exclude(key__in=SECRET_CONFIG_KEYS)
+        return queryset
 
     def get_permissions(self):
         if self.action in ("create", "update", "partial_update", "destroy", "reload", "cleanup_old_data", "test_mqtt"):
@@ -58,12 +70,14 @@ class PlatformConfigViewSet(viewsets.ModelViewSet):
         """
         items = []
         for item in DEFAULT_CONFIGS:
+            is_secret = bool(item.get("secret", False))
             items.append({
                 "key": item["key"],
                 "category": item.get("category", "general"),
-                "default": item.get("default"),
+                # 即使未来把敏感配置默认值改成非空，也不能从 schema 泄露。
+                "default": SECRET_MASK if is_secret else item.get("default"),
                 "description": item.get("description", ""),
-                "secret": bool(item.get("secret", False)),
+                "secret": is_secret,
                 "type": _infer_type(item),
             })
         # 已知 key 集合也一并返回，方便前端区分预定义与自定义配置
@@ -170,14 +184,16 @@ class PlatformConfigViewSet(viewsets.ModelViewSet):
         """
         results = {}
         try:
-            from services.mqtt_service import mqtt_service
-            from sensors.apps import SensorsConfig
+            from services.mqtt_command_bus import get_mqtt_command_bus
 
-            if SensorsConfig.mqtt_service_started and mqtt_service.client:
-                ok = mqtt_service.reconnect(timeout=5)
-                results["mqtt"] = "reconnected" if ok else "reconnect_failed"
-            else:
-                results["mqtt"] = "not_running"
+            # 任何 web worker 都只写 Redis control stream；唯一 mqtt_runner
+            # 读取数据库最新配置并重建 client，避免只重连命中请求的本地进程。
+            bus = get_mqtt_command_bus()
+            request_id = bus.enqueue_reload()
+            result = bus.wait_result(request_id, timeout=2.5)
+            state = result.get("status", "queued")
+            results["mqtt"] = state
+            results["request_id"] = request_id
         except Exception as e:
             results["mqtt"] = f"error: {e}"
             logger.warning(f"reload MQTT 异常: {e}")

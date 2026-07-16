@@ -1,15 +1,15 @@
 """
-自动化规则引擎
+自动化规则子进程内引擎
 脚本通过 from engine import sensors, devices 获取依赖。
 
 支持两种写法：
   1. 类风格：定义含 loop() 方法的类（引擎自动实例化并调用）
   2. 函数风格：直接定义顶层 loop() 函数
 
-安全策略：
-- 白名单 import：仅允许导入 engine / automation.head_files 下的模块
-- 禁用危险内置函数（open, eval, exec, compile, __import__ 原始版, globals, locals 等）
-- 脚本在受限命名空间中执行
+风险边界：
+- 脚本与 Django 进程同权限运行，不是安全沙箱，只能执行受信任代码
+- import 白名单和内置函数限制仅用于减少误操作面，不能作为隔离边界
+- 执行能力还受默认关闭的 AUTOMATION_SCRIPT_EXECUTION_ENABLED 显式开关控制
 """
 import logging
 import types
@@ -17,7 +17,14 @@ from typing import Optional
 
 import builtins as _bi
 
+from .execution_policy import ensure_script_execution_enabled
+
 logger = logging.getLogger(__name__)
+
+
+class AutomationRuleExecutionError(RuntimeError):
+    """规则脚本结构不完整，无法形成一次可执行的自动化拍。"""
+
 
 # 允许脚本 import 的模块白名单（前缀匹配）
 _BASE_IMPORT_WHITELIST = ('engine', 'automation.head_files')
@@ -31,7 +38,7 @@ def _get_import_whitelist():
         allowed.extend(extra)
     return tuple(allowed)
 
-# 禁用的内置函数：禁止文件/进程/动态代码操作
+# 从脚本的直接 builtins 映射移除这些入口；仅用于减少误操作，不代表能力隔离。
 _BLOCKED_BUILTINS = frozenset({
     'open', 'eval', 'exec', 'compile',
     '__import__', 'globals', 'locals',
@@ -39,13 +46,13 @@ _BLOCKED_BUILTINS = frozenset({
 })
 
 
-def _make_safe_builtins(custom_import):
-    """构建安全内置函数字典，移除危险函数，替换 __import__"""
-    safe = dict(vars(_bi))
+def _make_restricted_builtins(custom_import):
+    """构建受限内置函数字典；这是误操作防护，不是安全沙箱。"""
+    restricted = dict(vars(_bi))
     for name in _BLOCKED_BUILTINS:
-        safe.pop(name, None)
-    safe['__import__'] = custom_import
-    return safe
+        restricted.pop(name, None)
+    restricted['__import__'] = custom_import
+    return restricted
 
 
 def _make_custom_import(engine_module, real_import):
@@ -65,13 +72,14 @@ def _make_custom_import(engine_module, real_import):
 
 def execute_rule(rule) -> bool:
     """
-    执行单条自动化规则。
+    在已经初始化好的执行子进程内执行单条自动化规则。
     注入 engine 模块（含 sensors、devices），先尝试找带 loop() 方法的类，
     未找到则尝试顶层 loop() 函数。
-    在受限沙箱中运行，禁用文件/进程/动态代码操作。
+    import / builtins 限制不构成安全沙箱；脚本必须来自受信任的超级用户。
     """
+    ensure_script_execution_enabled()
     if not rule.script:
-        return False
+        raise AutomationRuleExecutionError("规则脚本为空")
 
     from automation.head_files.sensors import build_sensors
     from automation.head_files.devices import build_devices
@@ -88,10 +96,10 @@ def execute_rule(rule) -> bool:
 
     _real_import = _bi.__import__
     custom_import = _make_custom_import(engine, _real_import)
-    safe_builtins = _make_safe_builtins(custom_import)
+    restricted_builtins = _make_restricted_builtins(custom_import)
 
     namespace = {
-        '__builtins__': safe_builtins,
+        '__builtins__': restricted_builtins,
         'engine': engine,
         'Optional': Optional,
     }
@@ -113,15 +121,16 @@ def execute_rule(rule) -> bool:
             ret = loop_fn()
             return bool(ret) if ret is not None else False
 
-        logger.warning("自动化规则 [%s] 未找到带 loop() 的控制器类或顶层函数", rule.name)
-        return False
+        raise AutomationRuleExecutionError(
+            "未找到带 loop() 的控制器类或顶层 loop() 函数"
+        )
 
     except ImportError as e:
         logger.error("自动化规则 [%s] 尝试导入受限模块: %s", rule.name, e)
-        return False
+        raise
     except Exception as e:
         logger.exception("自动化规则执行异常 [%s]: %s", rule.name, e)
-        return False
+        raise
 
 
 def _find_controller_class(namespace: dict):

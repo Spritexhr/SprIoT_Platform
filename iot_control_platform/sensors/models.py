@@ -2,7 +2,8 @@
 传感器管理数据模型
 用于管理物联网输入器（传感器）设备和数据
 """
-from django.db import models
+from django.db import models, transaction
+from django.db.models.functions import Now
 from django.utils import timezone
 from django.contrib.auth.models import User
 from datetime import timedelta
@@ -153,6 +154,7 @@ class Sensor(models.Model):
     last_seen = models.DateTimeField(
         null=True,
         blank=True,
+        db_index=True,
         verbose_name="最后上报时间"
     )
 
@@ -204,17 +206,48 @@ class Sensor(models.Model):
         """根据 last_seen 实时计算在线状态：3分钟内有上报视为在线"""
         if not self.last_seen:
             return False
-        return (timezone.now() - self.last_seen) < timedelta(minutes=3)
+        age = timezone.now() - self.last_seen
+        return timedelta(0) <= age < timedelta(minutes=3)
 
     def update_last_seen(self, timestamp=None):
         """
-        更新最后上报时间。
-        当传感器上报数据或状态时调用此方法，确保 last_seen 保持最新。
+        以服务器接收时间更新最后上报时间。
+
+        ``timestamp`` 仅保留给服务器内部调用；超过当前服务器时间的值会被截断，
+        旧值不会让 ``last_seen`` 回退。数据库条件表达式保证并发上报时单调更新。
         """
-        ts = timestamp or timezone.now()
-        self.last_seen = ts
+        now = timezone.now()
+        ts = timestamp or now
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, timezone.get_current_timezone())
+        if ts > now:
+            ts = now
+
+        type(self).objects.filter(pk=self.pk).update(
+            last_seen=models.Case(
+                models.When(last_seen__isnull=True, then=models.Value(ts)),
+                models.When(last_seen__lt=ts, then=models.Value(ts)),
+                # 仅修复明显的历史未来脏值。使用数据库语句执行时刻并留出
+                # 5 分钟时钟偏差，避免一个较早开始、较晚落库的并发请求把
+                # 另一请求刚写入的合法新心跳误判为“未来”并回退。
+                models.When(
+                    last_seen__gt=Now() + timedelta(minutes=5),
+                    then=Now(),
+                ),
+                default=models.F('last_seen'),
+                output_field=models.DateTimeField(),
+            ),
+            is_online=True,
+            updated_at=Now(),
+        )
+        if (
+            self.last_seen is None
+            or self.last_seen < ts
+            or self.last_seen > now + timedelta(minutes=5)
+        ):
+            self.last_seen = ts
         self.is_online = True
-        self.save(update_fields=['last_seen', 'is_online', 'updated_at'])
+        self.updated_at = now
 
     def save(self, *args, **kwargs):
         """保存时自动设置 MQTT 主题，与 Arduino 固件保持一致"""
@@ -224,8 +257,28 @@ class Sensor(models.Model):
             'mqtt_topic_control': f"iot/sensors/{self.sensor_id}/control",
         }
         generated_fields = []
+        old_values = None
         for field_name, expected_value in expected_topics.items():
-            if getattr(self, field_name) != expected_value:
+            current_value = getattr(self, field_name)
+            should_generate = not current_value
+            if not should_generate and self.pk and current_value != expected_value:
+                if old_values is None:
+                    old_values = type(self).objects.filter(pk=self.pk).values(
+                        'sensor_id',
+                        'mqtt_topic_data',
+                        'mqtt_topic_status',
+                        'mqtt_topic_control',
+                    ).first()
+                if old_values and old_values['sensor_id'] != self.sensor_id:
+                    suffix = {
+                        'mqtt_topic_data': 'data',
+                        'mqtt_topic_status': 'status',
+                        'mqtt_topic_control': 'control',
+                    }[field_name]
+                    old_default = f"iot/sensors/{old_values['sensor_id']}/{suffix}"
+                    # ID 改名时只迁移系统生成主题，用户自定义主题保持不变。
+                    should_generate = current_value == old_default
+            if should_generate:
                 setattr(self, field_name, expected_value)
                 generated_fields.append(field_name)
 
@@ -270,6 +323,7 @@ class SensorStatusCollection(models.Model):
 
     received_at = models.DateTimeField(
         auto_now_add=True,
+        db_index=True,
         verbose_name="接收时间",
         help_text="服务器接收到数据的时间"
     )
@@ -280,16 +334,23 @@ class SensorStatusCollection(models.Model):
         ordering = ['-timestamp']
         indexes = [
             models.Index(fields=['sensor', '-timestamp']),
-            models.Index(fields=['timestamp']),
+            models.Index(
+                fields=['sensor', '-received_at'],
+                name='sensor_recv_latest_idx',
+            ),
         ]
     
     def __str__(self):
         return f"{self.sensor.sensor_id} - {self.timestamp}"
 
     def save(self, *args, **kwargs):
-        """保存状态记录时自动更新传感器的 last_seen"""
-        super().save(*args, **kwargs)
-        self.sensor.update_last_seen(self.timestamp)
+        """原子写入状态记录，并在 post_save 广播前更新在线状态。"""
+        is_new = self._state.adding
+        with transaction.atomic():
+            if is_new:
+                # 在线状态使用服务器接收时间，不能信任设备自带 timestamp。
+                self.sensor.update_last_seen()
+            super().save(*args, **kwargs)
     
 
 class SensorData(models.Model):
@@ -319,6 +380,7 @@ class SensorData(models.Model):
     
     received_at = models.DateTimeField(
         auto_now_add=True,
+        db_index=True,
         verbose_name="接收时间",
         help_text="服务器接收到数据的时间"
     )
@@ -329,15 +391,22 @@ class SensorData(models.Model):
         ordering = ['-timestamp']
         indexes = [
             models.Index(fields=['sensor', '-timestamp']),
-            models.Index(fields=['timestamp']),
+            models.Index(
+                fields=['sensor', '-received_at'],
+                name='sensor_data_recv_idx',
+            ),
         ]
     
     def __str__(self):
         return f"{self.sensor.sensor_id} - {self.timestamp}"
 
     def save(self, *args, **kwargs):
-        """保存数据记录时自动更新传感器的 last_seen"""
-        super().save(*args, **kwargs)
-        self.sensor.update_last_seen(self.timestamp)
+        """原子写入数据记录，并在 post_save 广播前更新在线状态。"""
+        is_new = self._state.adding
+        with transaction.atomic():
+            if is_new:
+                # 数据时间仍按设备上报值保存；在线心跳只认服务器接收时间。
+                self.sensor.update_last_seen()
+            super().save(*args, **kwargs)
     
     

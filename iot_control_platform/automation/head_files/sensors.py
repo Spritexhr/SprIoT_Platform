@@ -36,7 +36,9 @@ class SensorWrapper:
     def refresh(self) -> dict:
         """从数据库重新读取最新状态，刷新缓存并返回"""
         if self._sensor:
-            latest = self._sensor.data_records.order_by('-timestamp').first()
+            latest = self._sensor.data_records.order_by(
+                '-received_at', '-pk'
+            ).first()
             self._state_cache = latest.data if latest and latest.data else {}
         else:
             self._state_cache = {}
@@ -49,7 +51,9 @@ class SensorWrapper:
         """
         if not self._sensor:
             return []
-        records = list(self._sensor.data_records.order_by('-timestamp')[:n])
+        records = list(
+            self._sensor.data_records.order_by('-received_at', '-pk')[:n]
+        )
         values = []
         for rec in reversed(records):
             val = rec.data.get(field) if rec.data else None
@@ -67,7 +71,7 @@ class SensorWrapper:
         from django.utils import timezone
         from datetime import timedelta
         threshold = timezone.now() - timedelta(minutes=minutes)
-        records = self._sensor.data_records.filter(timestamp__gte=threshold)
+        records = self._sensor.data_records.filter(received_at__gte=threshold)
         values = []
         for rec in records:
             val = rec.data.get(field) if rec.data else None
@@ -80,11 +84,7 @@ class SensorWrapper:
     @property
     def is_online(self) -> bool:
         """是否在线：3 分钟内有数据上报"""
-        if not self._sensor or not self._sensor.last_seen:
-            return False
-        from django.utils import timezone
-        from datetime import timedelta
-        return (timezone.now() - self._sensor.last_seen) < timedelta(minutes=3)
+        return bool(self._sensor and self._sensor.computed_is_online)
 
 
 def build_sensors(device_list: List[Dict]) -> Any:

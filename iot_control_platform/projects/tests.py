@@ -1,15 +1,17 @@
 import importlib
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from automation.models import ControlScheme
-from devices.models import Device, DeviceType
-from sensors.models import Sensor, SensorType
+from devices.models import Device, DeviceStatusCollection, DeviceType
+from sensors.models import Sensor, SensorData, SensorType
 
 from .models import Project, ProjectDeviceMember, ProjectSection, ProjectSensorMember, ProjectView
 
@@ -137,6 +139,69 @@ class ProjectMemberDeleteProtectionTests(APITestCase):
         self.assertIsNone(sample["ts"])
         self.assertFalse(sample["is_online"])
 
+    def test_series_is_bounded_stable_and_project_scoped(self):
+        now = timezone.now()
+        for index in range(3):
+            SensorData.objects.create(
+                sensor=self.sensor,
+                data={"temperature": index},
+                timestamp=now,
+            )
+        url = reverse("project-series", args=[self.project.id])
+
+        response = self.client.get(
+            url,
+            {"kind": "sensor", "source_id": self.sensor.sensor_id, "limit": "2"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["count"], 3)
+        self.assertTrue(response.data["truncated"])
+        self.assertEqual(
+            [point["data"]["temperature"] for point in response.data["points"]],
+            [1, 2],
+        )
+
+        invalid_queries = (
+            {"kind": "sensor", "source_id": self.sensor.sensor_id, "start": "bad-date"},
+            {"kind": "sensor", "source_id": self.sensor.sensor_id, "limit": "0"},
+            {"kind": "sensor", "source_id": self.sensor.sensor_id, "limit": "10001"},
+            {"kind": "sensor", "source_id": self.sensor.sensor_id, "limit": "1.5"},
+            {
+                "kind": "sensor",
+                "source_id": self.sensor.sensor_id,
+                "start": (now - timedelta(days=32)).isoformat(),
+                "end": now.isoformat(),
+            },
+        )
+        for query in invalid_queries:
+            with self.subTest(query=query):
+                invalid = self.client.get(url, query)
+                self.assertEqual(
+                    invalid.status_code,
+                    status.HTTP_400_BAD_REQUEST,
+                    invalid.data,
+                )
+
+        unbound = Sensor.objects.create(
+            sensor_id="T-UNBOUND",
+            name="未加入项目的温度",
+            sensor_type=self.sensor.sensor_type,
+        )
+        unbound_response = self.client.get(
+            url,
+            {"kind": "sensor", "source_id": unbound.sensor_id},
+        )
+        missing_project_response = self.client.get(
+            reverse("project-series", args=[self.project.id + 9999]),
+            {"kind": "sensor", "source_id": self.sensor.sensor_id},
+        )
+        self.assertEqual(unbound_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(
+            missing_project_response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
     def test_control_scheme_status_is_published_for_diagram_node(self):
         with patch("services.realtime.dispatch.publish_control_scheme") as publish:
             with self.captureOnCommitCallbacks(execute=True):
@@ -257,3 +322,177 @@ class ProjectMemberDeleteProtectionTests(APITestCase):
             view.config["edges"][0]["data"],
             {"label": "进料", "kind": "process"},
         )
+
+
+class ProjectQueryPerformanceTests(APITestCase):
+    """项目聚合接口的查询数不能随项目或成员数量线性增长。"""
+
+    def setUp(self):
+        self.viewer = get_user_model().objects.create_user(
+            username="project-query-viewer",
+            password="test",
+        )
+        self.client.force_authenticate(self.viewer)
+        self.sensor_type = SensorType.objects.create(
+            SensorType_id="project-query-sensor",
+            name="项目查询传感器",
+            data_fields=["value"],
+            config_parameters=[],
+            commands={},
+        )
+        self.device_type = DeviceType.objects.create(
+            DeviceType_id="project-query-device",
+            name="项目查询设备",
+            config_parameters=["state"],
+            commands={"refresh": {"mqtt_message": {"command": "refresh"}}},
+        )
+        self.project = Project.objects.create(code="QUERY", name="查询性能项目")
+        self.section = ProjectSection.objects.create(
+            project=self.project,
+            name="查询性能分区",
+        )
+        ProjectView.objects.create(
+            project=self.project,
+            section=self.section,
+            name="默认卡片",
+            view_type="card",
+        )
+
+        now = timezone.now()
+        self.sensors = []
+        self.devices = []
+        for index in range(5):
+            sensor = Sensor.objects.create(
+                sensor_id=f"PROJECT-SENSOR-{index}",
+                name=f"项目传感器 {index}",
+                sensor_type=self.sensor_type,
+            )
+            device = Device.objects.create(
+                device_id=f"PROJECT-DEVICE-{index}",
+                name=f"项目设备 {index}",
+                device_type=self.device_type,
+            )
+            ProjectSensorMember.objects.create(
+                project=self.project,
+                section=self.section,
+                sensor=sensor,
+                data_key="value",
+                tag=f"S-{index}",
+            )
+            ProjectDeviceMember.objects.create(
+                project=self.project,
+                section=self.section,
+                device=device,
+                tag=f"D-{index}",
+            )
+            SensorData.objects.create(
+                sensor=sensor,
+                data={"value": index},
+                timestamp=now - timedelta(minutes=5),
+            )
+            SensorData.objects.create(
+                sensor=sensor,
+                data={"value": f"future-poison-{index}"},
+                timestamp=now + timedelta(days=3650),
+            )
+            SensorData.objects.create(
+                sensor=sensor,
+                data={"value": index + 100},
+                timestamp=now,
+            )
+            DeviceStatusCollection.objects.create(
+                device=device,
+                data={"state": f"old-{index}"},
+                event_name="old",
+                timestamp=now - timedelta(minutes=5),
+            )
+            DeviceStatusCollection.objects.create(
+                device=device,
+                data={"state": f"future-poison-{index}"},
+                event_name="future-poison",
+                timestamp=now + timedelta(days=3650),
+            )
+            DeviceStatusCollection.objects.create(
+                device=device,
+                data={"state": f"latest-{index}"},
+                event_name="latest",
+                timestamp=now,
+            )
+            self.sensors.append(sensor)
+            self.devices.append(device)
+
+        self.unbound_sensor = Sensor.objects.create(
+            sensor_id="PROJECT-SENSOR-UNBOUND",
+            name="未绑定传感器",
+            sensor_type=self.sensor_type,
+        )
+        self.unbound_device = Device.objects.create(
+            device_id="PROJECT-DEVICE-UNBOUND",
+            name="未绑定设备",
+            device_type=self.device_type,
+        )
+        for index in range(3):
+            Project.objects.create(
+                code=f"QUERY-EMPTY-{index}",
+                name=f"空项目 {index}",
+            )
+
+    def test_project_list_counts_use_one_annotated_page_query(self):
+        with self.assertNumQueries(2):
+            response = self.client.get(reverse("project-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        row = next(
+            item for item in response.data["results"]
+            if item["id"] == self.project.id
+        )
+        self.assertEqual(row["section_count"], 1)
+        self.assertEqual(row["sensor_count"], 5)
+        self.assertEqual(row["device_count"], 5)
+        self.assertEqual(row["view_count"], 1)
+
+    @patch("devices.online_status.get_device_offline_timeout", return_value=300)
+    def test_snapshot_bulk_loads_latest_member_values(self, _offline_timeout):
+        with self.assertNumQueries(3):
+            response = self.client.get(
+                reverse("project-snapshot", args=[self.project.id])
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["samples"]), 5)
+        self.assertEqual(len(response.data["devices"]), 5)
+        self.assertEqual(response.data["samples"][0]["value"], 100.0)
+        self.assertEqual(
+            response.data["devices"][0]["status"],
+            {"state": "latest-0"},
+        )
+        self.assertEqual(response.data["devices"][0]["event"], "latest")
+
+    def test_bindable_sources_bulk_loads_project_membership(self):
+        with self.assertNumQueries(5):
+            response = self.client.get(
+                reverse("project-bindable-sources", args=[self.project.id]),
+                {"section": self.section.id},
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        bound_sensor = next(
+            row for row in response.data["sensors"]
+            if row["id"] == self.sensors[0].id
+        )
+        unbound_sensor = next(
+            row for row in response.data["sensors"]
+            if row["id"] == self.unbound_sensor.id
+        )
+        bound_device = next(
+            row for row in response.data["devices"]
+            if row["id"] == self.devices[0].id
+        )
+        unbound_device = next(
+            row for row in response.data["devices"]
+            if row["id"] == self.unbound_device.id
+        )
+        self.assertEqual(bound_sensor["bound_data_keys"], ["value"])
+        self.assertEqual(unbound_sensor["bound_data_keys"], [])
+        self.assertTrue(bound_device["already_bound"])
+        self.assertFalse(unbound_device["already_bound"])

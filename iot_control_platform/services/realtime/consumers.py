@@ -14,6 +14,8 @@ from typing import List
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
+from .dispatch import g_device_one, g_sensor_one
+
 log = logging.getLogger(__name__)
 
 
@@ -82,7 +84,7 @@ class SensorStreamConsumer(_BaseAuthedConsumer):
 
     def _compute_groups(self):
         sid = self.scope["url_route"]["kwargs"]["sensor_id"]
-        return [f"sensors.{sid}"]
+        return [g_sensor_one(sid)]
 
     async def broadcast_sensor_data(self, event):
         await self.send_json({"event": "sensor.data", "data": event["payload"]})
@@ -115,7 +117,7 @@ class DeviceStreamConsumer(_BaseAuthedConsumer):
 
     def _compute_groups(self):
         did = self.scope["url_route"]["kwargs"]["device_id"]
-        return [f"devices.{did}"]
+        return [g_device_one(did)]
 
     async def broadcast_device_status(self, event):
         await self.send_json({"event": "device.status", "data": event["payload"]})
@@ -139,8 +141,8 @@ class MqttSystemConsumer(_BaseAuthedConsumer):
 
     URL: /ws/system/mqtt/
 
-    建连时立刻发一次当前状态（从 mqtt_service.is_connected 读），后续状态变化由
-    mqtt_service._on_connect/_on_disconnect 通过 dispatch.publish_mqtt_system 推过来。
+    建连时从 Redis runner heartbeat 读取当前状态；后续状态变化由唯一
+    mqtt_runner 通过 dispatch.publish_mqtt_system 推送。
     """
 
     groups_to_join = ["system.mqtt"]
@@ -157,9 +159,13 @@ class MqttSystemConsumer(_BaseAuthedConsumer):
     def _snapshot():
         try:
             from config.platform_config import get_config
-            from services.mqtt_service import mqtt_service
+            from services.mqtt_command_bus import get_mqtt_command_bus
+            runner = get_mqtt_command_bus().get_runner_status()
             return {
-                "is_connected": bool(getattr(mqtt_service, "is_connected", False)),
+                "is_connected": runner.get("is_connected") == "1",
+                "command_worker_alive": runner.get("command_worker_alive") == "1",
+                "runner_state": runner.get("state", "unavailable"),
+                "last_error": runner.get("last_error", ""),
                 "broker": get_config("mqtt_broker", "127.0.0.1", str),
                 "port": get_config("mqtt_port", 1883, int),
             }

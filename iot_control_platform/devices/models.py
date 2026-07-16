@@ -3,7 +3,8 @@
 用于管理物联网输出器（执行器）设备
 参考 sensors 应用结构实现
 """
-from django.db import models
+from django.db import models, transaction
+from django.db.models.functions import Now
 from django.utils import timezone
 from datetime import timedelta
 
@@ -147,6 +148,7 @@ class Device(models.Model):
     last_seen = models.DateTimeField(
         null=True,
         blank=True,
+        db_index=True,
         verbose_name="最后上报时间"
     )
 
@@ -195,11 +197,35 @@ class Device(models.Model):
 
     def save(self, *args, **kwargs):
         """保存时自动设置 MQTT 主题，与 Arduino 固件保持一致"""
-        # CharField 默认存 ""（不是 None），所以判断 falsy 覆盖空字符串和 None
-        if not self.mqtt_topic_data:
-            self.mqtt_topic_data = f"iot/devices/{self.device_id}/status"
-        if not self.mqtt_topic_control:
-            self.mqtt_topic_control = f"iot/devices/{self.device_id}/control"
+        expected_topics = {
+            'mqtt_topic_data': f"iot/devices/{self.device_id}/status",
+            'mqtt_topic_control': f"iot/devices/{self.device_id}/control",
+        }
+        generated_fields = []
+        old_values = None
+
+        for field_name, expected_value in expected_topics.items():
+            current_value = getattr(self, field_name)
+            should_generate = not current_value
+            if not should_generate and self.pk and current_value != expected_value:
+                if old_values is None:
+                    old_values = type(self).objects.filter(pk=self.pk).values(
+                        'device_id', 'mqtt_topic_data', 'mqtt_topic_control'
+                    ).first()
+                if old_values and old_values['device_id'] != self.device_id:
+                    old_default = (
+                        f"iot/devices/{old_values['device_id']}/status"
+                        if field_name == 'mqtt_topic_data'
+                        else f"iot/devices/{old_values['device_id']}/control"
+                    )
+                    # ID 改名时只迁移系统生成的主题，保留用户自定义主题。
+                    should_generate = current_value == old_default
+            if should_generate:
+                setattr(self, field_name, expected_value)
+                generated_fields.append(field_name)
+
+        if generated_fields and kwargs.get('update_fields') is not None:
+            kwargs['update_fields'] = set(kwargs['update_fields']) | set(generated_fields)
 
         super().save(*args, **kwargs)
 
@@ -211,11 +237,13 @@ class Device(models.Model):
 
     @property
     def computed_is_online(self):
-        """根据 last_seen 实时计算在线状态：超过心跳间隔 3 倍未上报视为离线"""
+        """根据平台统一的离线阈值实时计算在线状态。"""
         if not self.last_seen:
             return False
-        timeout = self.get_heartbeat_interval() * 3
-        return (timezone.now() - self.last_seen).total_seconds() < timeout
+        from .online_status import get_device_offline_timeout
+        timeout = get_device_offline_timeout()
+        age = (timezone.now() - self.last_seen).total_seconds()
+        return 0 <= age < timeout
 
     def check_online_status(self):
         """
@@ -223,11 +251,11 @@ class Device(models.Model):
         如果超过心跳间隔的3倍时间未收到心跳，标记为离线
         """
         if self.last_seen:
-            heartbeat_interval = self.get_heartbeat_interval()
-            timeout = heartbeat_interval * 3
+            from .online_status import get_device_offline_timeout
+            timeout = get_device_offline_timeout()
             time_diff = (timezone.now() - self.last_seen).total_seconds()
 
-            if time_diff > timeout:
+            if time_diff < 0 or time_diff > timeout:
                 if self.is_online:
                     self.is_online = False
                     self.save(update_fields=['is_online', 'updated_at'])
@@ -236,11 +264,36 @@ class Device(models.Model):
         return False
 
     def update_heartbeat(self, timestamp=None):
-        """更新心跳时间。可传入数据自带的 timestamp，缺省用当前时间。"""
-        ts = timestamp or timezone.now()
-        self.last_seen = ts
+        """以服务器接收时间单调更新心跳；未来时间会被截断。"""
+        now = timezone.now()
+        ts = timestamp or now
+        if timezone.is_naive(ts):
+            ts = timezone.make_aware(ts, timezone.get_current_timezone())
+        if ts > now:
+            ts = now
+
+        type(self).objects.filter(pk=self.pk).update(
+            last_seen=models.Case(
+                models.When(last_seen__isnull=True, then=models.Value(ts)),
+                models.When(last_seen__lt=ts, then=models.Value(ts)),
+                models.When(
+                    last_seen__gt=Now() + timedelta(minutes=5),
+                    then=Now(),
+                ),
+                default=models.F('last_seen'),
+                output_field=models.DateTimeField(),
+            ),
+            is_online=True,
+            updated_at=Now(),
+        )
+        if (
+            self.last_seen is None
+            or self.last_seen < ts
+            or self.last_seen > now + timedelta(minutes=5)
+        ):
+            self.last_seen = ts
         self.is_online = True
-        self.save(update_fields=['last_seen', 'is_online', 'updated_at'])
+        self.updated_at = now
 
     def get_data_count(self, hours=24):
         """
@@ -253,7 +306,7 @@ class Device(models.Model):
             int: 数据记录数
         """
         start_time = timezone.now() - timedelta(hours=hours)
-        return self.status_records.filter(timestamp__gte=start_time).count()
+        return self.status_records.filter(received_at__gte=start_time).count()
 
 
 class DeviceStatusCollection(models.Model):
@@ -291,6 +344,7 @@ class DeviceStatusCollection(models.Model):
 
     received_at = models.DateTimeField(
         auto_now_add=True,
+        db_index=True,
         verbose_name="接收时间",
         help_text="服务器接收到数据的时间"
     )
@@ -301,18 +355,23 @@ class DeviceStatusCollection(models.Model):
         ordering = ['-timestamp']
         indexes = [
             models.Index(fields=['device', '-timestamp']),
-            models.Index(fields=['timestamp']),
+            models.Index(
+                fields=['device', '-received_at'],
+                name='device_recv_latest_idx',
+            ),
         ]
 
     def __str__(self):
         return f"{self.device.device_id} - {self.timestamp}"
 
     def save(self, *args, **kwargs):
-        """保存时自动设置时间戳"""
+        """原子写入状态记录，并在 post_save 广播前更新在线状态。"""
         if not self.timestamp:
             self.timestamp = timezone.now()
 
-        super().save(*args, **kwargs)
-
-        # 更新设备的最新心跳，使用数据时间戳，与 sensors 行为一致
-        self.device.update_heartbeat(self.timestamp)
+        is_new = self._state.adding
+        with transaction.atomic():
+            if is_new:
+                # 设备自带 timestamp 仅用于历史数据排序，不能决定在线心跳。
+                self.device.update_heartbeat()
+            super().save(*args, **kwargs)

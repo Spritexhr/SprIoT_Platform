@@ -5,10 +5,17 @@
 """
 import json
 import logging
-import random
-import threading
-import time
 from typing import Any, Dict, Optional
+
+from django.conf import settings
+
+from services.mqtt_command_bus import (
+    MAX_BROKER_ACK_TIMEOUT_SECONDS,
+    MAX_DEVICE_ACK_TIMEOUT_SECONDS,
+    MqttCommandBusUnavailable,
+    get_mqtt_command_bus,
+    validate_command_timeout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +55,13 @@ class BaseCommandSendService:
     type_field_name = None
 
     def __init__(self, mqtt_service=None):
-        self.mqtt_service = mqtt_service
-        self._pending_check_codes: Dict[str, dict] = {}
-        self._check_code_ttl = 120
-        self._waiting_events: Dict[str, threading.Event] = {}
+        # 参数仅为兼容旧构造调用。backend 不再持有 Paho client；所有命令必须
+        # 经 Redis Streams 交给唯一 mqtt_runner，Redis 故障时 fail closed。
+        self.mqtt_service = None
 
     def set_mqtt_service(self, mqtt_service):
-        """设置MQTT服务实例"""
-        self.mqtt_service = mqtt_service
+        """旧 API 兼容占位；禁止重新建立进程内 MQTT 直连路径。"""
+        logger.debug("忽略 set_mqtt_service：命令统一经 Redis MQTT command bus")
 
     def _get_object(self, object_id: str):
         """根据 ID 获取模型实例"""
@@ -68,16 +74,19 @@ class BaseCommandSendService:
             return {}
         return getattr(type_obj, 'commands', None) or {}
 
-    def _publish_command(self, object_id: str, command_payload: Dict) -> bool:
-        """将已经组装完成的命令 payload 发布到设备/传感器控制主题。"""
+    def _publish_command(
+        self,
+        object_id: str,
+        command_payload: Dict,
+        *,
+        require_device_ack: bool = False,
+        timeout: float = 3.0,
+    ) -> bool:
+        """入 Redis Streams 并等待 runner 的 broker/设备确认。"""
         try:
             obj = self._get_object(object_id)
         except self.model_class.DoesNotExist:
             logger.error(f"{self.id_field_name}={object_id} 不存在")
-            return False
-
-        if not self.mqtt_service:
-            logger.error("MQTT服务未初始化")
             return False
 
         control_topic = obj.mqtt_topic_control
@@ -86,18 +95,55 @@ class BaseCommandSendService:
             return False
 
         try:
-            success = self.mqtt_service.publish(control_topic, command_payload, qos=1)
+            bus = get_mqtt_command_bus()
+            resource_type = "sensor" if self.id_field_name == "sensor_id" else "device"
+            broker_timeout = float(
+                getattr(settings, "MQTT_COMMAND_BROKER_ACK_TIMEOUT", 2.0)
+            )
+            broker_timeout = validate_command_timeout(
+                broker_timeout,
+                name="broker_ack_timeout",
+                maximum=MAX_BROKER_ACK_TIMEOUT_SECONDS,
+            )
+            device_timeout = validate_command_timeout(
+                timeout,
+                name="device_ack_timeout",
+                maximum=MAX_DEVICE_ACK_TIMEOUT_SECONDS,
+            )
+            wait_timeout = broker_timeout + (
+                device_timeout if require_device_ack else 0
+            ) + 1.0
+            request_id = bus.enqueue_command(
+                resource_type=resource_type,
+                resource_id=object_id,
+                topic=control_topic,
+                payload=command_payload,
+                require_device_ack=require_device_ack,
+                broker_ack_timeout=broker_timeout,
+                device_ack_timeout=device_timeout,
+                execute_within=wait_timeout,
+            )
+            result = bus.wait_result(request_id, timeout=wait_timeout)
+            expected = "device_acked" if require_device_ack else "broker_acked"
+            success = result.get("status") == expected
             if success:
-                check_code = command_payload.get('check_code')
-                if check_code:
-                    self._pending_check_codes[check_code] = {
-                        self.id_field_name: object_id,
-                        'sent_at': time.time(),
-                    }
-                logger.info(f"命令发送成功 - {self.id_field_name}={object_id} -> {command_payload.get('command', 'unknown')}")
+                logger.info(
+                    "命令确认成功 request_id=%s %s=%s status=%s",
+                    request_id, self.id_field_name, object_id, expected,
+                )
             else:
-                logger.error(f"命令发送失败 - {self.id_field_name}={object_id}")
+                logger.error(
+                    "命令未确认 request_id=%s %s=%s status=%s error=%s",
+                    request_id,
+                    self.id_field_name,
+                    object_id,
+                    result.get("status", "unknown"),
+                    result.get("error", ""),
+                )
             return success
+        except MqttCommandBusUnavailable as exc:
+            logger.error("Redis MQTT 命令总线不可用，拒绝发送: %s", exc)
+            return False
         except Exception as e:
             logger.error(f"命令发送异常 - {self.id_field_name}={object_id}: {e}", exc_info=True)
             return False
@@ -136,13 +182,6 @@ class BaseCommandSendService:
             return msg
         return {k: v for k, v in msg.items() if k != 'check_code'}
 
-    @staticmethod
-    def _inject_check_code(msg: dict) -> dict:
-        """make_sure 模式下注入 6 位随机 check_code（覆盖模板里任何残留值）"""
-        msg = msg.copy()
-        msg['check_code'] = str(random.randint(100000, 999999))
-        return msg
-
     def send_command(
         self,
         object_id: str,
@@ -150,6 +189,13 @@ class BaseCommandSendService:
         params: Optional[Dict] = None
     ) -> bool:
         """根据类型定义发送自定义命令"""
+        if not isinstance(command_name, str) or not command_name.strip():
+            logger.error("command_name 必须是非空字符串")
+            return False
+        command_name = command_name.strip()
+        if params is not None and not isinstance(params, dict):
+            logger.error("命令参数 params 必须是字典")
+            return False
         try:
             obj = self._get_object(object_id)
         except self.model_class.DoesNotExist:
@@ -194,6 +240,13 @@ class BaseCommandSendService:
             True: 在限制时间内收到正确 check_code
             False: 发送失败或超时未收到
         """
+        if not isinstance(command_name, str) or not command_name.strip():
+            logger.error("command_name 必须是非空字符串")
+            return False
+        command_name = command_name.strip()
+        if params is not None and not isinstance(params, dict):
+            logger.error("命令参数 params 必须是字典")
+            return False
         try:
             obj = self._get_object(object_id)
         except self.model_class.DoesNotExist:
@@ -213,57 +266,23 @@ class BaseCommandSendService:
             return False
         if params:
             mqtt_message = self._apply_params_to_message(mqtt_message, params)
-        mqtt_message = self._inject_check_code(mqtt_message)
-        check_code = mqtt_message.get('check_code')
-
-        if not check_code:
-            return self._publish_command(object_id, mqtt_message)
-
-        evt = threading.Event()
-        self._waiting_events[check_code] = evt
-
-        if not self._publish_command(object_id, mqtt_message):
-            self._waiting_events.pop(check_code, None)
-            return False
-
-        logger.info(f"等待 {self.id_field_name}={object_id} 回传 check_code {check_code}，最多 {timeout} 秒...")
-        try:
-            signaled = evt.wait(timeout=timeout)
-            if signaled:
-                logger.info(f"{self.id_field_name}={object_id} 已确认执行命令「{command_name}」")
-            else:
-                logger.warning(
-                    f"等待超时：{timeout} 秒内未收到 {self.id_field_name}={object_id} 的正确回传。"
-                    f"请检查：1) 是否已注册对应的 status handler 2) 设备/传感器是否在线"
-                )
-            return signaled
-        finally:
-            self._waiting_events.pop(check_code, None)
-
-    def _cleanup_expired_check_codes(self):
-        """清理过期的 check_code"""
-        now = time.time()
-        expired = [k for k, v in self._pending_check_codes.items() if now - v['sent_at'] > self._check_code_ttl]
-        for k in expired:
-            del self._pending_check_codes[k]
+        # check_code 由 command bus 使用 Redis SET NX 分配并在发布前持久化；
+        # status handler 成功落库后跨进程完成 request。
+        mqtt_message = self._strip_check_code(mqtt_message)
+        return self._publish_command(
+            object_id,
+            mqtt_message,
+            require_device_ack=True,
+            timeout=timeout,
+        )
 
     def verify_check_code(self, object_id: str, check_code: str) -> bool:
-        """
-        校验回传的 check_code 是否与已发送命令的校验码一致
-        返回 True 表示校验通过，False 表示校验失败或超时
-        """
-        if not check_code:
-            return True  # 无 check_code 视为通过（如心跳）
-        self._cleanup_expired_check_codes()
-        pending = self._pending_check_codes.pop(check_code, None)
-        if pending is None:
-            logger.warning(f"check_code 校验失败 - {self.id_field_name}={object_id} 回传的校验码 {check_code} 未找到或已过期")
+        """兼容旧调用点；实际映射已迁移到 Redis。"""
+        resource_type = "sensor" if self.id_field_name == "sensor_id" else "device"
+        try:
+            return get_mqtt_command_bus().resolve_check_code(
+                resource_type, object_id, check_code
+            )
+        except MqttCommandBusUnavailable as exc:
+            logger.error("Redis MQTT ACK 总线不可用: %s", exc)
             return False
-        if pending[self.id_field_name] != object_id:
-            logger.warning(f"check_code 校验失败 - ID 不匹配: 期望 {pending[self.id_field_name]}, 收到 {object_id}")
-            return False
-        logger.info(f"check_code 校验通过 - {self.id_field_name}={object_id} 已正确执行命令")
-        evt = self._waiting_events.pop(check_code, None)
-        if evt is not None:
-            evt.set()
-        return True

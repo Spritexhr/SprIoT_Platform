@@ -90,15 +90,18 @@ class SensorListSerializer(serializers.ModelSerializer):
 
     def get_is_online(self, obj):
         """根据 last_seen 实时计算在线状态：3分钟内有数据视为在线"""
-        if not obj.last_seen:
-            return False
-        from django.utils import timezone
-        from datetime import timedelta
-        timeout = timedelta(minutes=3)
-        return (timezone.now() - obj.last_seen) < timeout
+        return bool(obj.computed_is_online)
 
     def get_latest_data(self, obj):
-        # 优先使用 prefetch 预取的数据，避免 N+1 查询
+        # API 列表/详情通过相关子查询注入，查询数不随资源数量增长。
+        if hasattr(obj, '_latest_timestamp'):
+            if obj._latest_timestamp is None:
+                return None
+            return {
+                'data': obj._latest_data,
+                'timestamp': obj._latest_timestamp,
+            }
+        # 兼容其它调用方显式提供的预取结果。
         if hasattr(obj, '_prefetched_objects_cache') and 'data_records' in obj._prefetched_objects_cache:
             records = obj._prefetched_objects_cache['data_records']
             if records:
@@ -108,7 +111,7 @@ class SensorListSerializer(serializers.ModelSerializer):
                 }
             return None
         # 回退到查询
-        record = obj.data_records.order_by('-timestamp').first()
+        record = obj.data_records.order_by('-received_at', '-pk').first()
         if record:
             return {
                 'data': record.data,
@@ -131,7 +134,7 @@ class SensorDetailSerializer(SensorListSerializer):
         from django.utils import timezone
         from datetime import timedelta
         start = timezone.now() - timedelta(hours=24)
-        return obj.data_records.filter(timestamp__gte=start).count()
+        return obj.data_records.filter(received_at__gte=start).count()
 
 
 class SensorCreateUpdateSerializer(serializers.ModelSerializer):

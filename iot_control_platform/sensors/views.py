@@ -2,8 +2,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q, Count, Subquery, OuterRef
+from django.db.models import Q, Count, Subquery, OuterRef, IntegerField, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import timedelta
 from .models import SensorType, Sensor, SensorData, SensorStatusCollection
@@ -17,6 +19,55 @@ from .serializers import (
 )
 from resource_folders.models import ResourceFolder
 from resource_folders.pagination import ResourcePageNumberPagination
+from services.request_validation import parse_boolean
+
+
+DEFAULT_HISTORY_HOURS = 1
+MAX_HISTORY_HOURS = 24 * 31
+DEFAULT_DATA_LIMIT = 200
+DEFAULT_STATUS_LIMIT = 50
+MAX_HISTORY_LIMIT = 2000
+
+
+def _bounded_query_int(request, name, default, maximum):
+    """严格解析正整数查询参数，并阻止无界历史查询。"""
+    raw = request.query_params.get(name)
+    if raw is None:
+        return default
+    if not isinstance(raw, str) or not raw.isascii() or not raw.isdecimal():
+        raise ValidationError({name: f'{name} 必须是 1 到 {maximum} 之间的整数'})
+    value = int(raw)
+    if value < 1 or value > maximum:
+        raise ValidationError({name: f'{name} 必须是 1 到 {maximum} 之间的整数'})
+    return value
+
+
+def _with_latest_data(queryset):
+    """按服务器接收顺序附加最新数据，避免未来设备时间永久霸占当前值。"""
+    latest = SensorData.objects.filter(sensor_id=OuterRef('pk')).order_by(
+        '-received_at', '-pk'
+    )
+    return queryset.annotate(
+        _latest_data=Subquery(latest.values('data')[:1]),
+        _latest_timestamp=Subquery(latest.values('timestamp')[:1]),
+    )
+
+
+def _with_data_count_24h(queryset):
+    start = timezone.now() - timedelta(hours=24)
+    counts = (
+        SensorData.objects.filter(sensor_id=OuterRef('pk'), received_at__gte=start)
+        .order_by()
+        .values('sensor_id')
+        .annotate(total=Count('pk'))
+        .values('total')
+    )
+    return queryset.annotate(
+        _data_count_24h=Coalesce(
+            Subquery(counts[:1], output_field=IntegerField()),
+            Value(0),
+        )
+    )
 
 
 class SensorTypeViewSet(viewsets.ModelViewSet):
@@ -36,9 +87,7 @@ class SensorViewSet(viewsets.ModelViewSet):
     支持按 sensor_id 查找、筛选、搜索
     创建/修改/删除/发送命令仅限工作人员，非工作人员仅可查看
     """
-    queryset = Sensor.objects.select_related('sensor_type', 'folder').prefetch_related(
-        'data_records'
-    ).all()
+    queryset = Sensor.objects.select_related('sensor_type', 'folder').all()
     lookup_field = 'sensor_id'
     pagination_class = ResourcePageNumberPagination
 
@@ -63,11 +112,16 @@ class SensorViewSet(viewsets.ModelViewSet):
         # 按在线状态筛选（基于 last_seen 实时计算，3分钟内有数据视为在线）
         online = self.request.query_params.get('online')
         if online is not None:
-            threshold = timezone.now() - timedelta(minutes=3)
+            now = timezone.now()
+            threshold = now - timedelta(minutes=3)
             if online == 'true':
-                qs = qs.filter(last_seen__gte=threshold)
+                qs = qs.filter(last_seen__gt=threshold, last_seen__lte=now)
             elif online == 'false':
-                qs = qs.filter(Q(last_seen__isnull=True) | Q(last_seen__lt=threshold))
+                qs = qs.filter(
+                    Q(last_seen__isnull=True)
+                    | Q(last_seen__lte=threshold)
+                    | Q(last_seen__gt=now)
+                )
         # 搜索
         search = self.request.query_params.get('search')
         if search:
@@ -79,6 +133,11 @@ class SensorViewSet(viewsets.ModelViewSet):
             if not folder.isdigit():
                 return qs.none()
             qs = qs.filter(folder_id=int(folder), folder__resource_type=ResourceFolder.SENSOR)
+        action_name = getattr(self, 'action', None)
+        if action_name in ('list', 'retrieve'):
+            qs = _with_latest_data(qs)
+        if action_name == 'retrieve':
+            qs = _with_data_count_24h(qs)
         return qs
 
     @action(detail=False, methods=['post'], url_path='bulk-move')
@@ -103,24 +162,34 @@ class SensorViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='data')
     def sensor_data(self, request, sensor_id=None):
         """获取传感器历史数据，支持时间范围查询"""
+        hours = _bounded_query_int(
+            request, 'hours', DEFAULT_HISTORY_HOURS, MAX_HISTORY_HOURS
+        )
+        limit = _bounded_query_int(
+            request, 'limit', DEFAULT_DATA_LIMIT, MAX_HISTORY_LIMIT
+        )
         sensor = self.get_object()
-        hours = int(request.query_params.get('hours', 1))
-        limit = int(request.query_params.get('limit', 200))
-        start_time = timezone.now() - timedelta(hours=hours)
+        now = timezone.now()
+        start_time = now - timedelta(hours=hours)
         records = SensorData.objects.filter(
-            sensor=sensor, timestamp__gte=start_time
-        ).order_by('-timestamp')[:limit]
+            sensor=sensor,
+            timestamp__gte=start_time,
+            timestamp__lte=now,
+        ).order_by('-timestamp', '-pk')[:limit]
         serializer = SensorDataSerializer(records, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='status')
     def sensor_status(self, request, sensor_id=None):
         """获取传感器状态记录"""
+        limit = _bounded_query_int(
+            request, 'limit', DEFAULT_STATUS_LIMIT, MAX_HISTORY_LIMIT
+        )
         sensor = self.get_object()
-        limit = int(request.query_params.get('limit', 50))
         records = SensorStatusCollection.objects.filter(
-            sensor=sensor
-        ).order_by('-timestamp')[:limit]
+            sensor=sensor,
+            timestamp__lte=timezone.now(),
+        ).order_by('-timestamp', '-pk')[:limit]
         serializer = SensorStatusSerializer(records, many=True)
         return Response(serializer.data)
 
@@ -183,11 +252,23 @@ class SensorViewSet(viewsets.ModelViewSet):
         sensor = self.get_object()
         command_name = request.data.get('command_name')
         params = request.data.get('params', {})
-        make_sure = request.data.get('make_sure', False)
+        try:
+            make_sure = parse_boolean(
+                request.data.get('make_sure'),
+                field_name='make_sure',
+            )
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not command_name:
+        if not isinstance(command_name, str) or not command_name.strip():
             return Response(
-                {'detail': '缺少 command_name 参数'},
+                {'detail': 'command_name 必须是非空字符串'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        command_name = command_name.strip()
+        if not isinstance(params, dict):
+            return Response(
+                {'detail': 'params 必须是 JSON 对象'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

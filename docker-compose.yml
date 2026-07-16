@@ -25,7 +25,8 @@ services:
     image: docker.m.daocloud.io/library/redis:7-alpine
     pull_policy: if_not_present
     container_name: iot-redis
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    # Streams 承载设备控制命令；AOF 将宿主机故障时的丢失窗口限制在约 1 秒。
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes", "--appendfsync", "everysec", "--loglevel", "warning"]
     volumes:
       - redis_data:/data
     ports:
@@ -51,9 +52,7 @@ services:
       - DB_HOST=mysql
       - DB_PORT=3306
       - REDIS_URL=redis://redis:6379/0
-      # web worker 不跑 MQTT 客户端，避免 N 个 worker 重复处理消息
-      # MQTT 由独立的 mqtt_runner service 统一处理
-      - IOT_MQTT_RUNNER=false
+      # web worker 永不创建 Paho client；命令经 Redis Streams 交给 mqtt_runner。
     command:
       - sh
       - -c
@@ -98,6 +97,8 @@ services:
       - DB_HOST=mysql
       - DB_PORT=3306
       - REDIS_URL=redis://redis:6379/0
+      # 稳定 client id + persistent session，runner 重连期间 broker 可保留 QoS1 队列。
+      - MQTT_CLIENT_ID=${MQTT_CLIENT_ID:-spr-iot-platform-runner}
     command: ["python", "manage.py", "mqtt_runner"]
     env_file:
       - .env
@@ -109,6 +110,51 @@ services:
       backend:
         # 等 backend 的 healthcheck 通过（即 migrate + configure --init 已完成、gunicorn 已监听）
         # 才启动，避免读到 platform_settings 默认值（127.0.0.1）
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os,time,redis;
+          r=redis.Redis.from_url(os.environ['REDIS_URL'],decode_responses=True,socket_timeout=2);
+          p=os.environ.get('MQTT_BUS_PREFIX','spr:iot:mqtt');
+          h=r.hgetall(p+':runner:status:v1');
+          lease=r.get(p+':runner:lease:v1');
+          assert h and lease and h.get('instance_id') == lease and h.get('command_worker_alive') == '1' and time.time()*1000-int(h['heartbeat_at_ms']) < 20000
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  data_cleanup:
+    build:
+      context: ./iot_control_platform
+      dockerfile: Dockerfile
+    container_name: iot-data-cleanup
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings
+      - DB_USE_MYSQL=true
+      - DB_NAME=${DB_NAME:-iot_platform}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - REDIS_URL=redis://redis:6379/0
+    command:
+      - sh
+      - -c
+      - >-
+        while true; do
+          python manage.py cleanup_old_data || true;
+          sleep 86400;
+        done
+    env_file:
+      - .env
+    depends_on:
+      backend:
         condition: service_healthy
     restart: unless-stopped
 
