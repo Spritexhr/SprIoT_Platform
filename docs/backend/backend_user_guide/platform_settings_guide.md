@@ -37,6 +37,12 @@
 | 新增、编辑、删除配置（API） | 超级用户（is_superuser） |
 | `configure` 命令 | 容器内执行（已通过 Docker 隔离） |
 
+### 1.5 敏感信息与 WebSocket 日志
+
+浏览器建立 WebSocket 时会使用 `?token=<jwt>` 完成握手鉴权。0.11 起，后端在读取凭据后会从 ASGI scope 中移除 `token` 参数（其它非敏感参数仍会保留），前端 Nginx 的 `/ws/` access log 也只记录不含查询参数的 `$uri`，避免 JWT 进入应用日志和 Docker 容器日志。
+
+日志脱敏是纵深防御，不能代替凭据管理：不要把真实 token 写进工单、截图或调试日志；升级前已经产生的旧日志可能仍含 token，应按部署的日志留存策略处理，并在怀疑泄露时让相关凭据失效。
+
 ---
 
 ## 二、`configure` 管理命令（写入唯一入口）
@@ -188,27 +194,73 @@ curl -X POST -H "Authorization: Bearer <access_token>" \
 
 ## 五、数据清理（cleanup_old_data）
 
-```bash
-# 立即执行
-python manage.py cleanup_old_data
+### 5.1 手工预览与执行
 
-# 试运行
-python manage.py cleanup_old_data --dry-run
+先在连接生产 MySQL 的 backend 容器中预览，确认留存天数、截止时间和预计删除量：
+
+```bash
+# 只预览，不删除（推荐先执行）
+docker compose exec -T backend \
+  python manage.py cleanup_old_data --dry-run
 
 # 自定义分批
-python manage.py cleanup_old_data --batch-size 500
+docker compose exec -T backend \
+  python manage.py cleanup_old_data --dry-run --batch-size 500
 ```
 
-**注意**：从 0.7 起，`cleanup_old_data` 不再放在容器启动 command 里；建议挂宿主机 cron：
+如需立即手工执行真实清理，必须明确去掉 `--dry-run`：
 
-```cron
-0 2 * * * docker compose exec -T backend python manage.py cleanup_old_data
+```bash
+docker compose exec -T backend \
+  python manage.py cleanup_old_data --batch-size 1000
 ```
 
-或通过 API（仅超级用户）：
+真实删除不可撤销，请在执行前备份 MySQL，并再次核对预览结果。
+
+### 5.2 可选维护容器
+
+`data_cleanup` 属于 `maintenance` profile，常规 `docker compose up -d` **不会创建或启动**它。确认预览结果后，可显式启用周期清理：
+
+```bash
+docker compose --profile maintenance up -d data_cleanup
+```
+
+容器每次启动或重启都会：
+
+1. 先运行一次 `--dry-run`，预览预计删除量；
+2. 等待 `DATA_CLEANUP_INITIAL_DELAY_SECONDS`，默认 86400 秒（24 小时）；
+3. 才执行第一次真实清理，之后按 `DATA_CLEANUP_INTERVAL_SECONDS` 周期运行。
+
+因此启用或重启维护容器不会立即删除历史数据。可在 `.env` 调整以下参数：
+
+| 变量 | 默认值 | 有效范围 | 说明 |
+|------|--------|----------|------|
+| `DATA_CLEANUP_INITIAL_DELAY_SECONDS` | `86400` | 整数，至少 3600 | 首次真实清理前等待时间 |
+| `DATA_CLEANUP_INTERVAL_SECONDS` | `86400` | 整数，至少 3600 | 后续清理间隔 |
+| `DATA_CLEANUP_BATCH_SIZE` | `1000` | 1 至 10000 | 每批删除条数 |
+
+停止周期清理：
+
+```bash
+docker compose --profile maintenance stop data_cleanup
+```
+
+### 5.3 通过 API 预览与确认
+
+API 仅超级用户可调用。省略 `dry_run` 时默认只预览，不删除：
 
 ```bash
 curl -X POST -H "Authorization: Bearer <token>" \
+  http://localhost:8000/api/platform-configs/cleanup-old-data/
+```
+
+真实删除必须同时传入 JSON 布尔值 `false` 和固定确认短语；字符串 `"false"` 会被拒绝：
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run":false,"confirmation":"DELETE_EXPIRED_HISTORY"}' \
   http://localhost:8000/api/platform-configs/cleanup-old-data/
 ```
 

@@ -130,6 +130,10 @@ services:
       start_period: 20s
 
   data_cleanup:
+    # 历史数据删除属于破坏性维护操作，默认不随常规 compose up 启动。
+    # 显式启用：docker compose --profile maintenance up -d data_cleanup
+    profiles:
+      - maintenance
     build:
       context: ./iot_control_platform
       dockerfile: Dockerfile
@@ -143,20 +147,39 @@ services:
       - DB_HOST=mysql
       - DB_PORT=3306
       - REDIS_URL=redis://redis:6379/0
+      - DATA_CLEANUP_INITIAL_DELAY_SECONDS=${DATA_CLEANUP_INITIAL_DELAY_SECONDS:-86400}
+      - DATA_CLEANUP_INTERVAL_SECONDS=${DATA_CLEANUP_INTERVAL_SECONDS:-86400}
+      - DATA_CLEANUP_BATCH_SIZE=${DATA_CLEANUP_BATCH_SIZE:-1000}
     command:
       - sh
-      - -c
+      - -ec
       - >-
+        initial_delay="$${DATA_CLEANUP_INITIAL_DELAY_SECONDS:-86400}";
+        interval="$${DATA_CLEANUP_INTERVAL_SECONDS:-86400}";
+        batch_size="$${DATA_CLEANUP_BATCH_SIZE:-1000}";
+        case "$$initial_delay" in ''|*[!0-9]*) echo "DATA_CLEANUP_INITIAL_DELAY_SECONDS 必须是整数" >&2; exit 64;; esac;
+        case "$$interval" in ''|*[!0-9]*) echo "DATA_CLEANUP_INTERVAL_SECONDS 必须是整数" >&2; exit 64;; esac;
+        case "$$batch_size" in ''|*[!0-9]*) echo "DATA_CLEANUP_BATCH_SIZE 必须是整数" >&2; exit 64;; esac;
+        if [ "$$initial_delay" -lt 3600 ]; then echo "DATA_CLEANUP_INITIAL_DELAY_SECONDS 不能小于 3600" >&2; exit 64; fi;
+        if [ "$$interval" -lt 3600 ]; then echo "DATA_CLEANUP_INTERVAL_SECONDS 不能小于 3600" >&2; exit 64; fi;
+        if [ "$$batch_size" -lt 1 ] || [ "$$batch_size" -gt 10000 ]; then echo "DATA_CLEANUP_BATCH_SIZE 必须在 1 到 10000 之间" >&2; exit 64; fi;
+        echo "先执行试运行；不会在容器启动时立即删除数据";
+        python manage.py cleanup_old_data --dry-run --batch-size "$$batch_size";
+        echo "试运行完成，等待 $$initial_delay 秒后才会首次执行真实清理";
+        sleep "$$initial_delay";
         while true; do
-          python manage.py cleanup_old_data || true;
-          sleep 86400;
+          echo "开始执行定期历史数据清理";
+          python manage.py cleanup_old_data --batch-size "$$batch_size";
+          echo "清理完成，等待 $$interval 秒后再次执行";
+          sleep "$$interval";
         done
     env_file:
       - .env
     depends_on:
       backend:
         condition: service_healthy
-    restart: unless-stopped
+    # 错误不得被吞掉；有限重试后保持失败状态，便于从 docker ps/logs 发现。
+    restart: "on-failure:3"
 
   mcp:
     build:

@@ -1,10 +1,13 @@
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+from asgiref.sync import async_to_sync
 from channels.layers import InMemoryChannelLayer
 from django.db import IntegrityError
+from django.contrib.auth.models import AnonymousUser
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
+from uvicorn.protocols.utils import get_path_with_query_string
 
 from devices.models import Device, DeviceStatusCollection, DeviceType
 from sensors.models import Sensor, SensorData, SensorStatusCollection, SensorType
@@ -20,6 +23,39 @@ from .dispatch import (
     make_resource_group,
 )
 from .latest_values import LatestValuesCache, PointSample
+from .middleware import JwtAuthMiddleware
+
+
+class JwtAuthMiddlewareSecurityTests(SimpleTestCase):
+    def test_token_is_removed_from_uvicorn_and_downstream_scopes(self):
+        captured = {}
+
+        async def inner(scope, receive, send):
+            captured.update(scope)
+
+        async def receive():
+            return {"type": "websocket.disconnect"}
+
+        async def send(message):
+            return None
+
+        scope = {
+            "type": "websocket",
+            "path": "/ws/sensors/",
+            "query_string": b"view=compact&token=secret-jwt&lang=zh",
+        }
+        authenticate = AsyncMock(return_value=AnonymousUser())
+
+        with patch("services.realtime.middleware._authenticate", authenticate):
+            async_to_sync(JwtAuthMiddleware(inner))(scope, receive, send)
+
+        authenticate.assert_awaited_once_with("secret-jwt")
+        self.assertEqual(scope["query_string"], b"view=compact&lang=zh")
+        self.assertEqual(captured["query_string"], b"view=compact&lang=zh")
+        logged_path = get_path_with_query_string(scope)
+        self.assertNotIn("secret-jwt", logged_path)
+        self.assertNotIn("token=", logged_path)
+        self.assertIn("view=compact", logged_path)
 
 
 class ChannelGroupNameTests(SimpleTestCase):

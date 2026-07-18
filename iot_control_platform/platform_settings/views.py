@@ -205,18 +205,47 @@ class PlatformConfigViewSet(viewsets.ModelViewSet):
     def cleanup_old_data(self, request):
         """
         执行 cleanup_old_data：按配置的留存天数清理过期传感器/设备数据
-        仅超级用户可调用
+        仅超级用户可调用。默认仅预览；真实删除必须显式确认。
         """
+        dry_run = request.data.get("dry_run", True)
+        if not isinstance(dry_run, bool):
+            return Response(
+                {"dry_run": ["必须是布尔值；省略时默认为 true"]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            not dry_run
+            and request.data.get("confirmation") != "DELETE_EXPIRED_HISTORY"
+        ):
+            return Response(
+                {
+                    "confirmation": [
+                        "真实删除必须传入 confirmation=DELETE_EXPIRED_HISTORY"
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             from django.core.management import call_command
             from io import StringIO
 
             out = StringIO()
-            call_command("cleanup_old_data", stdout=out)
+            call_command("cleanup_old_data", dry_run=dry_run, stdout=out)
             output = out.getvalue().strip()
-            logger.info(f"API 触发 cleanup_old_data: {output}")
+            mode = "试运行" if dry_run else "真实删除"
+            logger.info(f"API 触发 cleanup_old_data（{mode}）: {output}")
             return Response(
-                {"message": "cleanup completed", "output": output},
+                {
+                    "message": (
+                        "cleanup preview completed"
+                        if dry_run
+                        else "cleanup completed"
+                    ),
+                    "dry_run": dry_run,
+                    "output": output,
+                },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:

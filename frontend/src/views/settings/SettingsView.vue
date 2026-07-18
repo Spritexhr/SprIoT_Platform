@@ -272,7 +272,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus, VideoPlay, Connection } from '@element-plus/icons-vue'
 import { getMqttStatus } from '@/api/system'
@@ -661,17 +661,59 @@ async function handleDeleteCustom(key) {
 // ==================== 命令 ====================
 const reloadLoading = ref(false)
 const cleanupLoading = ref(false)
+const CLEANUP_CONFIRMATION = 'DELETE_EXPIRED_HISTORY'
+
+function cleanupErrorMessage(err) {
+  const detail = err?.response?.data
+  if (typeof detail === 'object' && detail !== null) {
+    return detail.detail || ls.t('settings.cleanupFailed')
+  }
+  return ls.t('settings.cleanupFailed')
+}
 
 async function handleCleanupOldData() {
+  if (cleanupLoading.value) return
   cleanupLoading.value = true
   try {
-    const res = await runCleanupOldData()
+    // 第一步只做试运行：先让管理员看到会受影响的数据，再允许实际删除。
+    const preview = await runCleanupOldData({ dry_run: true })
+    const previewOutput = typeof preview?.output === 'string' && preview.output.trim()
+      ? preview.output.trim()
+      : ls.t('settings.cleanupPreviewComplete')
+
+    const confirmMessage = h('div', null, [
+      h('p', { style: 'margin: 0 0 12px;' }, ls.t('settings.cleanupPreviewIntro')),
+      h('pre', {
+        style: 'max-height: 260px; margin: 0 0 14px; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; border-radius: 6px; background: var(--el-fill-color-light); color: var(--el-text-color-primary); font-family: inherit;',
+      }, previewOutput),
+      h('p', {
+        style: 'margin: 0; font-weight: 600; color: var(--el-color-danger);',
+      }, ls.t('settings.cleanupIrreversibleWarning')),
+    ])
+
+    try {
+      await ElMessageBox.confirm(confirmMessage, ls.t('settings.cleanupPreviewTitle'), {
+        type: 'warning',
+        confirmButtonText: ls.t('settings.cleanupConfirmDelete'),
+        cancelButtonText: ls.t('common.cancel'),
+        closeOnClickModal: false,
+        distinguishCancelAndClose: true,
+      })
+    } catch (action) {
+      // 关闭或取消确认框属于正常退出，不显示错误提示，也不会发送删除请求。
+      if (action === 'cancel' || action === 'close') return
+      throw action
+    }
+
+    // 第二步必须显式关闭 dry-run，并携带后端要求的不可逆操作确认令牌。
+    const res = await runCleanupOldData({
+      dry_run: false,
+      confirmation: CLEANUP_CONFIRMATION,
+    })
     const output = res?.output || ''
     ElMessage.success(output || ls.t('settings.cleanupSuccess'))
   } catch (err) {
-    const detail = err.response?.data
-    const msg = typeof detail === 'object' ? (detail.detail || ls.t('settings.cleanupFailed')) : ls.t('settings.cleanupFailed')
-    ElMessage.error(msg)
+    ElMessage.error(cleanupErrorMessage(err))
   } finally {
     cleanupLoading.value = false
   }

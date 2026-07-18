@@ -4,10 +4,16 @@ on:
   push:
     paths:
       - "iot_control_platform/**"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "frontend/nginx.conf"
       - ".github/workflows/backend.yml"
   pull_request:
     paths:
       - "iot_control_platform/**"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "frontend/nginx.conf"
       - ".github/workflows/backend.yml"
 
 permissions:
@@ -68,6 +74,23 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Validate dependency graph
         run: pip check
+      - name: Validate Docker Compose config
+        working-directory: .
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose --profile maintenance config --quiet
+          if docker compose config --services | grep -Fxq data_cleanup; then
+            echo "data_cleanup must not be enabled by default" >&2
+            exit 1
+          fi
+          docker compose --profile maintenance config --services | grep -Fxq data_cleanup
+      - name: Validate WebSocket log redaction policy
+        working-directory: .
+        run: |
+          grep -Fq 'log_format ws_no_query' frontend/nginx.conf
+          grep -Fq '"$request_method $uri $server_protocol"' frontend/nginx.conf
+          grep -Fq 'access_log /var/log/nginx/access.log ws_no_query;' frontend/nginx.conf
       - name: Run Django checks
         run: python manage.py check
       - name: Check committed migrations

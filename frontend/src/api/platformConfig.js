@@ -30,9 +30,15 @@ export function reloadPlatformConfig() {
   return request.post('/platform-configs/reload/')
 }
 
-/** 执行数据清理（按留存天数清理过期数据，仅管理员） */
-export function runCleanupOldData() {
-  return request.post('/platform-configs/cleanup-old-data/')
+/**
+ * 预览或执行历史数据清理（仅管理员）。
+ * 默认始终为试运行，实际删除还需由调用方明确传入 dry_run: false 和确认令牌。
+ */
+export function runCleanupOldData(payload = {}) {
+  return request.post('/platform-configs/cleanup-old-data/', {
+    dry_run: true,
+    ...payload,
+  })
 }
 
 /** 获取平台预定义配置项 schema（来源 defaults.py） */
