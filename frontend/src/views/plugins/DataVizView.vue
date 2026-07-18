@@ -133,6 +133,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, ArrowLeft } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { getDataVizSources, getDataVizSeries } from '@/api/plugins'
+import { readChartTheme, withAlpha } from '@/utils/chartTheme'
 
 const router = useRouter()
 
@@ -253,21 +254,34 @@ function renderChart() {
   if (!chartInstance) {
     chartInstance = echarts.init(chartEl.value)
   }
+  const theme = readChartTheme()
   const points = seriesData.value.points || []
   const events = seriesData.value.events || []
   const fields = selectedFields.value.length
     ? selectedFields.value
     : availableFields.value.slice(0, 2)
 
-  const series = fields.map((field) => ({
-    name: field,
-    type: 'line',
-    smooth: true,
-    showSymbol: points.length < 200,
-    connectNulls: false,
-    sampling: 'lttb',
-    data: points.map((p) => [p.t, coerceNumber(p.data?.[field])]),
-  }))
+  const series = fields.map((field, idx) => {
+    const color = theme.palette[idx % theme.palette.length]
+    return {
+      name: field,
+      type: 'line',
+      smooth: true,
+      showSymbol: points.length < 200,
+      connectNulls: false,
+      sampling: 'lttb',
+      itemStyle: { color },
+      lineStyle: { color, width: 2.5 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: withAlpha(color, 0.14) },
+          { offset: 1, color: withAlpha(color, 0) },
+        ]),
+      },
+      emphasis: { focus: 'series' },
+      data: points.map((p) => [p.t, coerceNumber(p.data?.[field])]),
+    }
+  })
 
   // 状态事件标记到图表中（mark line），heartbeat 纯心跳包不展示
   const visibleEvents = events.filter((e) => e.event !== 'heartbeat')
@@ -277,33 +291,85 @@ function renderChart() {
       markLine: {
         symbol: 'none',
         silent: true,
-        lineStyle: { color: 'rgba(255, 159, 64, 0.6)', type: 'dashed' },
+        lineStyle: { color: withAlpha(theme.warning, 0.62), type: 'dashed' },
         data: visibleEvents.slice(0, 50).map((e) => ({
           xAxis: e.t,
-          label: { formatter: e.event || '', position: 'end', fontSize: 10 },
+          label: {
+            formatter: e.event || '',
+            position: 'end',
+            fontSize: 10,
+            color: theme.warning,
+          },
         })),
       },
     }
   }
 
   chartInstance.setOption({
+    backgroundColor: 'transparent',
+    color: theme.palette,
+    textStyle: {
+      color: theme.textRegular,
+      fontFamily: theme.fontFamily,
+    },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
+      confine: true,
+      backgroundColor: theme.surface,
+      borderColor: theme.border,
+      borderWidth: 1,
+      padding: 12,
+      textStyle: { color: theme.textPrimary, fontFamily: theme.fontFamily },
+      axisPointer: {
+        type: 'cross',
+        lineStyle: { color: withAlpha(theme.primary, 0.52) },
+        crossStyle: { color: withAlpha(theme.primary, 0.52) },
+        label: { color: theme.textInverse, backgroundColor: theme.primary },
+      },
+      extraCssText: `border-radius:${theme.radius}px;box-shadow:0 12px 32px ${withAlpha(theme.textPrimary, 0.14)};backdrop-filter:blur(18px);`,
     },
-    legend: { data: fields, top: 0 },
-    grid: { left: 50, right: 30, top: 40, bottom: 60 },
+    legend: {
+      data: fields,
+      top: 0,
+      textStyle: { color: theme.textRegular, fontFamily: theme.fontFamily },
+    },
+    grid: { left: 50, right: 30, top: 48, bottom: 72, containLabel: true },
     xAxis: {
       type: 'time',
-      axisLabel: { hideOverlap: true },
+      axisLine: { lineStyle: { color: theme.separator } },
+      axisTick: { lineStyle: { color: theme.separator } },
+      axisLabel: { hideOverlap: true, color: theme.textSecondary },
+      splitLine: { show: true, lineStyle: { color: theme.separator } },
     },
     yAxis: {
       type: 'value',
       scale: true,
+      axisLine: { lineStyle: { color: theme.separator } },
+      axisTick: { lineStyle: { color: theme.separator } },
+      axisLabel: { color: theme.textSecondary },
+      splitLine: { show: true, lineStyle: { color: theme.separator } },
     },
     dataZoom: [
       { type: 'inside' },
-      { type: 'slider', height: 24, bottom: 10 },
+      {
+        type: 'slider',
+        height: 24,
+        bottom: 10,
+        textStyle: { color: theme.textSecondary },
+        borderColor: theme.separator,
+        backgroundColor: theme.material,
+        fillerColor: withAlpha(theme.primary, 0.14),
+        dataBackground: {
+          lineStyle: { color: withAlpha(theme.textSecondary, 0.32) },
+          areaStyle: { color: withAlpha(theme.textSecondary, 0.08) },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: withAlpha(theme.primary, 0.64) },
+          areaStyle: { color: withAlpha(theme.primary, 0.12) },
+        },
+        handleStyle: { color: theme.primary, borderColor: theme.surface },
+        moveHandleStyle: { color: theme.primary },
+      },
     ],
     series,
   }, { notMerge: true })
@@ -314,13 +380,32 @@ function handleResize() {
 }
 
 // ==================== 生命周期 ====================
-onMounted(async () => {
-  await fetchSources()
+let themeObserver = null
+let themeFrame = null
+
+onMounted(() => {
   window.addEventListener('resize', handleResize)
+
+  themeObserver = new MutationObserver(() => {
+    if (themeFrame) cancelAnimationFrame(themeFrame)
+    themeFrame = requestAnimationFrame(() => {
+      themeFrame = null
+      if (chartInstance && hasPoints.value) renderChart()
+    })
+  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+
+  fetchSources()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  themeObserver?.disconnect()
+  themeObserver = null
+  if (themeFrame) {
+    cancelAnimationFrame(themeFrame)
+    themeFrame = null
+  }
   chartInstance?.dispose()
   chartInstance = null
 })

@@ -1,54 +1,107 @@
 /* ============================================
-   SprIoT_Platform - 全局样式
+   SprIoT 全局界面基础
+   响应、层级、材质、空间一致性和无障碍集中在这里维护
    ============================================ */
 
 @use './variables.scss';
 
-/* ---------- Reset / 基础重置 ---------- */
+/* ---------- Reset / 平台字体 ---------- */
 *,
 *::before,
 *::after {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
 html {
-  font-size: 14px;
+  min-width: 320px;
+  font-size: 100%;
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  color: var(--iot-text-primary);
+  background:
+    radial-gradient(circle at 8% -8%, var(--iot-color-primary-bg), transparent 31rem),
+    radial-gradient(circle at 88% 4%, rgba(255, 255, 255, 0.72), transparent 35rem),
+    linear-gradient(145deg, var(--iot-bg-page), var(--iot-bg-page-deep));
+  background-attachment: fixed;
   font-family: var(--iot-font-family);
   font-size: var(--iot-font-size-base);
-  color: var(--iot-text-primary);
-  background-color: var(--iot-bg-page);
-  line-height: 1.6;
-  letter-spacing: 0.01em;
-  transition: background-color var(--iot-transition-base),
-              color var(--iot-transition-base);
+  line-height: 1.5;
+  letter-spacing: 0;
+  transition: background-color var(--iot-transition-base), color var(--iot-transition-base);
+}
+
+html.dark body {
+  background:
+    radial-gradient(circle at 7% -8%, var(--iot-color-primary-bg), transparent 32rem),
+    radial-gradient(circle at 92% 2%, rgba(255, 255, 255, 0.025), transparent 38rem),
+    linear-gradient(145deg, var(--iot-bg-page), var(--iot-bg-page-deep));
 }
 
 #app {
   width: 100%;
   min-height: 100vh;
+  isolation: isolate;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+[role='button'],
+a,
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']) {
+  touch-action: manipulation;
 }
 
 a {
   color: var(--iot-color-primary);
   text-decoration: none;
-  transition: color var(--iot-transition-fast);
+  transition: color var(--iot-transition-fast), opacity var(--iot-transition-instant);
 
   &:hover {
-    color: var(--iot-color-primary-light);
+    color: var(--iot-color-primary-dark);
+  }
+
+  &:active {
+    opacity: 0.62;
   }
 }
 
-/* ---------- 滚动条 ---------- */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--iot-focus-ring);
+}
+
+::selection {
+  color: var(--iot-text-primary);
+  background: var(--iot-color-primary-soft);
+}
+
+/* ---------- 细滚动条，悬停时才增加存在感 ---------- */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -56,46 +109,66 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--iot-border-color);
-  border-radius: 3px;
+  border: 2px solid transparent;
+  border-radius: var(--iot-radius-pill);
+  background: color-mix(in srgb, var(--iot-text-secondary) 42%, transparent);
+  background-clip: padding-box;
 
   &:hover {
-    background: var(--iot-text-secondary);
+    background: color-mix(in srgb, var(--iot-text-secondary) 66%, transparent);
+    background-clip: padding-box;
   }
 }
 
-/* ---------- 选中文本 ---------- */
-::selection {
-  background-color: color-mix(in srgb, var(--iot-color-primary) 25%, transparent);
-  color: var(--iot-text-primary);
-}
-
 /* ============================================
-   通用工具类
+   通用构件
    ============================================ */
 
-/* ---------- 卡片 ---------- */
+/* ---------- 材质卡片 ---------- */
 .iot-card {
-  background: var(--iot-bg-card);
-  border-radius: var(--iot-radius-lg);
-  box-shadow: var(--iot-shadow-sm);
+  position: relative;
   border: 1px solid var(--iot-border-color-light);
-  transition: transform var(--iot-transition-base),
-              box-shadow var(--iot-transition-base),
-              background-color var(--iot-transition-base);
+  border-radius: var(--iot-radius-lg);
+  background: var(--iot-bg-card);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-sm);
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(165%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(165%);
+  transition:
+    transform var(--iot-transition-base),
+    border-color var(--iot-transition-fast),
+    box-shadow var(--iot-transition-base),
+    background-color var(--iot-transition-base);
 }
 
-.iot-card--hover:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--iot-shadow-md);
+@media (hover: hover) and (pointer: fine) {
+  .iot-card--hover:hover {
+    border-color: color-mix(in srgb, var(--iot-color-primary) 20%, var(--iot-border-color-light));
+    background: var(--iot-bg-card-hover);
+    box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-base);
+    transform: translateY(-2px);
+  }
+}
+
+.iot-card--hover:active {
+  transform: scale(0.992);
+  transition-duration: 100ms;
 }
 
 .iot-card__header {
-  padding: var(--iot-spacing-md) var(--iot-spacing-lg);
-  border-bottom: 1px solid var(--iot-border-color-light);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 58px;
+  padding: var(--iot-spacing-md) var(--iot-spacing-lg);
+  border-bottom: 1px solid var(--iot-separator);
+}
+
+.iot-card__header h2,
+.iot-card__header h3 {
+  font-family: var(--iot-font-display);
+  font-size: var(--iot-font-size-md);
+  font-weight: 650;
+  letter-spacing: -0.012em;
 }
 
 .iot-card__body {
@@ -104,39 +177,37 @@ a {
 
 .iot-card__footer {
   padding: var(--iot-spacing-md) var(--iot-spacing-lg);
-  border-top: 1px solid var(--iot-border-color-light);
+  border-top: 1px solid var(--iot-separator);
 }
 
-/* ---------- 状态指示圆点 ---------- */
+/* ---------- 状态 ---------- */
 .iot-status-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   border-radius: var(--iot-radius-round);
-  flex-shrink: 0;
 
   &--online {
-    background-color: var(--iot-color-success);
-    box-shadow: 0 0 6px rgba(76, 175, 130, 0.45);
-    animation: iot-pulse 2s ease-in-out infinite;
+    border-color: color-mix(in srgb, var(--iot-color-success) 45%, transparent);
+    background: var(--iot-color-success);
+    box-shadow: 0 0 0 3px var(--iot-color-success-bg);
   }
 
   &--offline {
-    background-color: var(--iot-color-info);
+    background: var(--iot-color-info);
   }
 
   &--loading {
-    background-color: var(--iot-color-primary);
-    animation: iot-spin 1s linear infinite;
+    border: 2px solid var(--iot-color-primary-bg);
+    border-top-color: var(--iot-color-primary);
+    background: transparent;
+    animation: iot-spin 0.8s linear infinite;
   }
 
-  &--warning {
-    background-color: var(--iot-color-warning);
-  }
-
-  &--danger {
-    background-color: var(--iot-color-danger);
-  }
+  &--warning { background: var(--iot-color-warning); }
+  &--danger { background: var(--iot-color-danger); }
 
   &--lg {
     width: 10px;
@@ -144,25 +215,28 @@ a {
   }
 }
 
-/* ---------- 状态标签 ---------- */
 .iot-status-tag {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 24px;
   padding: 2px 10px;
-  border-radius: 20px;
+  border: 1px solid transparent;
+  border-radius: var(--iot-radius-pill);
   font-size: var(--iot-font-size-xs);
-  font-weight: 500;
-  line-height: 20px;
+  font-weight: 600;
+  line-height: 1.25;
 
   &--online {
     color: var(--iot-color-success);
     background: var(--iot-color-success-bg);
+    border-color: color-mix(in srgb, var(--iot-color-success) 18%, transparent);
   }
 
   &--offline {
     color: var(--iot-color-info);
-    background: rgba(139, 123, 107, 0.10);
+    background: color-mix(in srgb, var(--iot-color-info) 10%, transparent);
+    border-color: color-mix(in srgb, var(--iot-color-info) 16%, transparent);
   }
 
   &--warning {
@@ -176,95 +250,82 @@ a {
   }
 }
 
-/* ---------- 数据数值（大号） ---------- */
+/* ---------- 数据排版 ---------- */
 .iot-data-value {
-  font-size: var(--iot-font-size-data);
-  font-weight: 700;
   color: var(--iot-text-primary);
-  line-height: 1.2;
+  font-family: var(--iot-font-display);
+  font-size: var(--iot-font-size-data);
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+  line-height: 1.08;
 
-  &--lg {
-    font-size: var(--iot-font-size-data-lg);
-  }
-
-  &--sm {
-    font-size: var(--iot-font-size-lg);
-  }
+  &--lg { font-size: var(--iot-font-size-data-lg); }
+  &--sm { font-size: var(--iot-font-size-lg); }
 }
 
 .iot-data-unit {
-  font-size: var(--iot-font-size-sm);
-  font-weight: 400;
+  margin-left: 0.267rem;
   color: var(--iot-text-secondary);
-  margin-left: 4px;
+  font-size: var(--iot-font-size-sm);
+  font-weight: 450;
 }
 
 .iot-data-label {
-  font-size: var(--iot-font-size-xs);
+  margin-bottom: var(--iot-spacing-2xs);
   color: var(--iot-text-secondary);
-  margin-bottom: 4px;
-  letter-spacing: 0.02em;
+  font-size: var(--iot-font-size-xs);
+  font-weight: 520;
+  letter-spacing: 0.018em;
 }
 
-/* ---------- 页面标题区 ---------- */
+/* ---------- 页面标题与内容层级 ---------- */
 .iot-page-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: var(--iot-spacing-lg);
+  gap: var(--iot-spacing-lg);
+  min-height: 64px;
+  margin-bottom: var(--iot-spacing-xl);
 }
 
 .iot-page-title {
-  font-size: var(--iot-font-size-xl);
-  font-weight: 600;
   color: var(--iot-text-primary);
-  letter-spacing: -0.01em;
+  font-family: var(--iot-font-display);
+  font-size: var(--iot-font-size-xl);
+  font-weight: 680;
+  letter-spacing: -0.032em;
+  line-height: 1.08;
 }
 
 .iot-page-subtitle {
-  font-size: var(--iot-font-size-sm);
+  max-width: 60ch;
+  margin-top: 0.467rem;
   color: var(--iot-text-secondary);
-  margin-top: 4px;
+  font-size: var(--iot-font-size-sm);
+  line-height: 1.45;
 }
 
-/* ---------- 网格布局 ---------- */
+/* ---------- 布局工具 ---------- */
 .iot-grid {
   display: grid;
   gap: var(--iot-spacing-md);
 }
 
 .iot-grid--cards {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
 }
 
 .iot-grid--stats {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
 }
 
-/* ---------- Flex 工具 ---------- */
-.iot-flex {
-  display: flex;
-  align-items: center;
-}
+.iot-flex { display: flex; align-items: center; }
+.iot-flex--between { justify-content: space-between; }
+.iot-flex--center { justify-content: center; }
+.iot-flex--gap-sm { gap: var(--iot-spacing-sm); }
+.iot-flex--gap-md { gap: var(--iot-spacing-md); }
 
-.iot-flex--between {
-  justify-content: space-between;
-}
-
-.iot-flex--center {
-  justify-content: center;
-}
-
-.iot-flex--gap-sm {
-  gap: var(--iot-spacing-sm);
-}
-
-.iot-flex--gap-md {
-  gap: var(--iot-spacing-md);
-}
-
-/* ---------- 间距工具 ---------- */
 .iot-mt-sm { margin-top: var(--iot-spacing-sm); }
 .iot-mt-md { margin-top: var(--iot-spacing-md); }
 .iot-mt-lg { margin-top: var(--iot-spacing-lg); }
@@ -272,7 +333,6 @@ a {
 .iot-mb-md { margin-bottom: var(--iot-spacing-md); }
 .iot-mb-lg { margin-bottom: var(--iot-spacing-lg); }
 
-/* ---------- 文字工具 ---------- */
 .iot-text-primary { color: var(--iot-text-primary); }
 .iot-text-regular { color: var(--iot-text-regular); }
 .iot-text-secondary { color: var(--iot-text-secondary); }
@@ -288,433 +348,464 @@ a {
 /* ============================================
    动画
    ============================================ */
-@keyframes iot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
 @keyframes iot-spin {
-  from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
-@keyframes iot-fade-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes iot-materialize {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0) scale(1);
+  }
 }
 
 .iot-animate-fade-in {
-  animation: iot-fade-in 0.3s ease forwards;
+  animation: iot-materialize 380ms var(--iot-ease-spring) both;
 }
 
 /* ============================================
-   Element Plus 全局样式覆盖（Claude 风格）
+   Element Plus：统一成同一套物理材质与反馈
    ============================================ */
 
-/* 按钮 */
+/* ---------- 按钮 ---------- */
 .el-button {
+  min-height: 36px;
   border-radius: var(--iot-radius-base) !important;
-  font-weight: 500 !important;
-  letter-spacing: 0.01em !important;
-}
+  font-weight: 560 !important;
+  letter-spacing: 0 !important;
+  transition:
+    transform var(--iot-transition-instant),
+    color var(--iot-transition-fast),
+    border-color var(--iot-transition-fast),
+    background-color var(--iot-transition-fast),
+    box-shadow var(--iot-transition-fast) !important;
 
-/* 只覆盖实体主色按钮，不影响 text / link 类型 */
-.el-button--primary:not(.is-text):not(.is-link) {
-  background-color: var(--iot-color-primary) !important;
-  border-color: var(--iot-color-primary) !important;
+  &:focus-visible {
+    box-shadow: var(--iot-focus-ring) !important;
+  }
 
-  &:hover {
-    background-color: var(--iot-color-primary-light) !important;
-    border-color: var(--iot-color-primary-light) !important;
+  &:active:not(.is-disabled) {
+    transform: scale(0.97);
+    transition-duration: 100ms !important;
   }
 }
 
-/* text 类型主色按钮 */
-.el-button--primary.is-text {
+.el-button--small { min-height: 30px; }
+.el-button--large { min-height: 44px; }
+
+.el-button--primary:not(.is-text):not(.is-link) {
+  border-color: var(--iot-color-primary) !important;
+  background: var(--iot-color-primary) !important;
+  color: var(--iot-text-inverse) !important;
+  box-shadow: 0 1px 1px rgba(79, 34, 20, 0.12), 0 5px 12px rgba(217, 104, 69, 0.17);
+
+  &:hover {
+    border-color: var(--iot-color-primary-light) !important;
+    background: var(--iot-color-primary-light) !important;
+  }
+
+  &:active:not(.is-disabled) {
+    border-color: var(--iot-color-primary-pressed) !important;
+    background: var(--iot-color-primary-pressed) !important;
+  }
+}
+
+.el-button--primary.is-text,
+.el-button--primary.is-link {
   color: var(--iot-color-primary) !important;
   background: transparent !important;
 
-  &:hover {
-    background-color: var(--iot-color-primary-bg) !important;
-  }
+  &:hover { background: var(--iot-color-primary-bg) !important; }
 }
 
-/* plain 主色按钮 */
 .el-button.el-button--primary.is-plain {
-  background-color: var(--iot-color-primary-bg) !important;
-  border-color: var(--iot-color-primary) !important;
-  color: var(--iot-color-primary) !important;
   --el-button-text-color: var(--iot-color-primary) !important;
+  border-color: color-mix(in srgb, var(--iot-color-primary) 34%, transparent) !important;
+  background: var(--iot-color-primary-bg) !important;
+  color: var(--iot-color-primary-dark) !important;
+  box-shadow: none;
 
   &:hover {
-    background-color: var(--iot-color-primary) !important;
     border-color: var(--iot-color-primary) !important;
+    background: var(--iot-color-primary) !important;
     color: var(--iot-text-inverse) !important;
-    --el-button-text-color: var(--iot-text-inverse) !important;
-  }
-
-  &:focus {
-    background-color: var(--iot-color-primary-bg) !important;
-    border-color: var(--iot-color-primary) !important;
-    color: var(--iot-color-primary) !important;
   }
 }
 
-/* plain 危险按钮 */
 .el-button.el-button--danger.is-plain {
-  background-color: var(--iot-color-danger-bg) !important;
-  border-color: var(--iot-color-danger) !important;
-  color: var(--iot-color-danger) !important;
   --el-button-text-color: var(--iot-color-danger) !important;
+  border-color: color-mix(in srgb, var(--iot-color-danger) 32%, transparent) !important;
+  background: var(--iot-color-danger-bg) !important;
+  color: var(--iot-color-danger) !important;
 
   &:hover {
-    background-color: var(--iot-color-danger) !important;
     border-color: var(--iot-color-danger) !important;
+    background: var(--iot-color-danger) !important;
     color: var(--iot-text-inverse) !important;
   }
-
-  &:focus {
-    background-color: var(--iot-color-danger-bg) !important;
-    border-color: var(--iot-color-danger) !important;
-    color: var(--iot-color-danger) !important;
-  }
 }
 
-/* 弹窗 */
-.el-dialog {
-  border-radius: var(--iot-radius-xl) !important;
-  box-shadow: var(--iot-shadow-lg) !important;
-  border: 1px solid var(--iot-border-color-light) !important;
+/* ---------- 输入控件 ---------- */
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner,
+.el-input-number,
+.el-date-editor.el-input__wrapper {
+  border-radius: var(--iot-radius-base) !important;
+  background: color-mix(in srgb, var(--iot-bg-card-solid) 88%, transparent) !important;
+  box-shadow: 0 0 0 1px var(--iot-border-color) inset !important;
+  transition: background-color var(--iot-transition-fast), box-shadow var(--iot-transition-fast) !important;
 }
 
-.el-dialog__header {
-  border-bottom: 1px solid var(--iot-border-color-light);
-  padding: 20px 24px 16px !important;
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-textarea__inner:hover {
+  background: var(--iot-bg-card-solid) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--iot-color-primary) 52%, var(--iot-border-color)) inset !important;
 }
 
-.el-dialog__title {
-  font-weight: 600 !important;
-  font-size: var(--iot-font-size-md) !important;
-  color: var(--iot-text-primary) !important;
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  background: var(--iot-bg-card-solid) !important;
+  box-shadow: 0 0 0 1px var(--iot-color-primary) inset, var(--iot-focus-ring) !important;
 }
 
-/* 抽屉 */
-.el-drawer__body {
-  padding: var(--iot-spacing-lg);
+.el-form-item__label {
+  color: var(--iot-text-regular) !important;
+  font-weight: 540;
 }
 
-/* 表格 */
-.el-table {
-  --el-table-border-color: var(--iot-border-color-light);
-  --el-table-header-bg-color: var(--iot-bg-page);
-  border-radius: var(--iot-radius-lg);
+/* ---------- 浮层、弹窗与抽屉 ---------- */
+.el-overlay {
+  background: var(--iot-bg-overlay) !important;
+  backdrop-filter: blur(8px) saturate(120%);
+  -webkit-backdrop-filter: blur(8px) saturate(120%);
+}
+
+.el-dialog,
+.el-message-box {
   overflow: hidden;
+  border: 1px solid var(--iot-border-color-light) !important;
+  border-radius: var(--iot-radius-xl) !important;
+  background: var(--iot-material-thick) !important;
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-lg) !important;
+  backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(180%);
 }
+
+.el-dialog__header,
+.el-message-box__header {
+  margin: 0 !important;
+  padding: 21px 24px 17px !important;
+  border-bottom: 1px solid var(--iot-separator);
+}
+
+.el-dialog__title,
+.el-message-box__title {
+  color: var(--iot-text-primary) !important;
+  font-family: var(--iot-font-display);
+  font-size: var(--iot-font-size-md) !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.015em;
+}
+
+.el-dialog__body { padding: 22px 24px !important; }
+.el-dialog__footer { padding: 0 24px 22px !important; }
+
+.el-drawer {
+  border: 1px solid var(--iot-border-color-light);
+  background: var(--iot-material-thick) !important;
+  box-shadow: var(--iot-shadow-lg) !important;
+  backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(180%);
+}
+
+.el-drawer__body { padding: var(--iot-spacing-lg); }
+
+.el-popper.is-light,
+.el-dropdown__popper,
+.el-select__popper,
+.el-picker__popper,
+.el-popover.el-popper {
+  border: 1px solid var(--iot-border-color-light) !important;
+  border-radius: var(--iot-radius-lg) !important;
+  background: var(--iot-bg-elevated) !important;
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-md) !important;
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(180%);
+}
+
+.el-popper.is-dark {
+  border-radius: var(--iot-radius-sm) !important;
+  background: color-mix(in srgb, var(--iot-text-primary) 90%, transparent) !important;
+  backdrop-filter: blur(var(--iot-material-blur-sm));
+}
+
+/* ---------- 表格与描述列表 ---------- */
+.el-table {
+  --el-table-border-color: var(--iot-separator);
+  --el-table-header-bg-color: color-mix(in srgb, var(--iot-bg-card-solid) 70%, transparent);
+  --el-table-row-hover-bg-color: var(--iot-color-primary-bg);
+  overflow: hidden;
+  border-radius: var(--iot-radius-lg);
+  background: transparent !important;
+}
+
+.el-table::before,
+.el-table__inner-wrapper::before { display: none; }
 
 .el-table th.el-table__cell {
-  font-weight: 600 !important;
   color: var(--iot-text-secondary) !important;
   font-size: var(--iot-font-size-xs) !important;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-weight: 620 !important;
+  letter-spacing: 0.025em;
 }
 
-/* 标签页 */
+.el-table td.el-table__cell { color: var(--iot-text-regular); }
+
+.el-descriptions {
+  --el-descriptions-table-border: 1px solid var(--iot-separator);
+}
+
+/* ---------- 导航、标签与选择器 ---------- */
 .el-tabs__nav-wrap::after {
   height: 1px !important;
-  background-color: var(--iot-border-color-light) !important;
+  background: var(--iot-separator) !important;
 }
 
-.el-tabs__item.is-active {
-  color: var(--iot-color-primary) !important;
-}
-
-.el-tabs__active-bar {
-  background-color: var(--iot-color-primary) !important;
-}
-
-/* 输入框 */
-.el-input__wrapper {
-  border-radius: var(--iot-radius-base) !important;
-  box-shadow: 0 0 0 1px var(--iot-border-color) inset !important;
-  background-color: var(--iot-bg-card) !important;
-  transition: box-shadow var(--iot-transition-fast) !important;
-
-  &:hover {
-    box-shadow: 0 0 0 1px var(--iot-color-primary) inset !important;
-  }
-
-  &.is-focus {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--iot-color-primary) 25%, transparent) inset,
-                0 0 0 1px var(--iot-color-primary) inset !important;
-  }
-}
-
-/* 选择器 */
-.el-select .el-input__wrapper {
-  border-radius: var(--iot-radius-base) !important;
-}
-
-/* 标签 */
-.el-tag {
-  border-radius: 20px !important;
-  font-weight: 500 !important;
-}
-
-/* 分页 */
-.el-pagination button,
-.el-pagination .el-pager li {
-  border-radius: var(--iot-radius-sm) !important;
-}
-
-/* 面包屑 */
-.el-breadcrumb__item .el-breadcrumb__inner {
+.el-tabs__item {
   color: var(--iot-text-secondary) !important;
-  font-weight: 400 !important;
+  font-weight: 540;
+  transition: color var(--iot-transition-fast) !important;
+}
 
-  &:hover {
-    color: var(--iot-color-primary) !important;
-  }
+.el-tabs__item.is-active { color: var(--iot-text-primary) !important; }
+.el-tabs__active-bar {
+  height: 3px !important;
+  border-radius: var(--iot-radius-pill);
+  background: var(--iot-color-primary) !important;
+}
+
+.el-breadcrumb__separator {
+  color: var(--iot-text-tertiary) !important;
+  font-weight: 400 !important;
+}
+
+.el-breadcrumb__inner {
+  color: var(--iot-text-secondary) !important;
+  font-weight: 480 !important;
+
+  &:hover { color: var(--iot-color-primary) !important; }
 }
 
 .el-breadcrumb__item:last-child .el-breadcrumb__inner {
   color: var(--iot-text-primary) !important;
-  font-weight: 500 !important;
+  font-weight: 560 !important;
 }
 
-/* 下拉菜单 */
 .el-dropdown-menu {
-  border-radius: var(--iot-radius-lg) !important;
-  border: 1px solid var(--iot-border-color-light) !important;
-  box-shadow: var(--iot-shadow-md) !important;
   padding: 6px !important;
-  overflow: hidden;
+  border: 0 !important;
+  background: transparent !important;
 }
 
 .el-dropdown-menu__item {
+  min-height: 34px;
   border-radius: var(--iot-radius-sm) !important;
-  font-size: var(--iot-font-size-sm) !important;
   color: var(--iot-text-regular) !important;
-  transition: background var(--iot-transition-fast) !important;
+  font-size: var(--iot-font-size-sm) !important;
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast) !important;
 
-  &:hover {
-    background-color: var(--iot-color-primary-bg) !important;
-    color: var(--iot-color-primary) !important;
+  &:hover,
+  &:focus {
+    color: var(--iot-text-primary) !important;
+    background: var(--iot-color-primary-bg) !important;
   }
 }
 
-/* ============================================
-   暗色模式下 Element Plus 适配
-   ============================================ */
-html.dark {
-  .el-table {
-    --el-table-bg-color: var(--iot-bg-card);
-    --el-table-tr-bg-color: var(--iot-bg-card);
-    --el-table-header-bg-color: var(--iot-bg-page);
-    --el-table-row-hover-bg-color: var(--iot-bg-card-hover);
-    --el-table-text-color: var(--iot-text-primary);
-    --el-table-border-color: var(--iot-border-color);
-  }
-
-  .el-dialog,
-  .el-drawer {
-    background-color: var(--iot-bg-card);
-    border-color: var(--iot-border-color) !important;
-  }
-
-  .el-input__wrapper {
-    background-color: var(--iot-bg-page) !important;
-    box-shadow: 0 0 0 1px var(--iot-border-color) inset !important;
-
-    &.is-focus {
-      box-shadow: 0 0 0 2px color-mix(in srgb, var(--iot-color-primary) 20%, transparent) inset,
-                  0 0 0 1px var(--iot-color-primary) inset !important;
-    }
-  }
-
-  .el-card {
-    background-color: var(--iot-bg-card);
-    border-color: var(--iot-border-color);
-  }
-
-  .el-dropdown-menu {
-    background-color: var(--iot-bg-card) !important;
-    border-color: var(--iot-border-color) !important;
-  }
-
-  .el-dropdown-menu__item:hover {
-    background-color: var(--iot-color-primary-bg) !important;
-  }
-
-  .el-select-dropdown {
-    background-color: var(--iot-bg-card) !important;
-    border-color: var(--iot-border-color) !important;
-  }
-
-  .el-popper.is-light {
-    background-color: var(--iot-bg-card) !important;
-    border-color: var(--iot-border-color) !important;
-  }
+.el-tag {
+  border-radius: var(--iot-radius-pill) !important;
+  font-weight: 560 !important;
 }
 
+.el-switch__core { transition: border-color var(--iot-transition-fast), background-color var(--iot-transition-fast) !important; }
+.el-switch__action { transition: transform var(--iot-transition-base), width var(--iot-transition-fast) !important; }
+.el-checkbox__inner,
+.el-radio__inner { transition: all var(--iot-transition-fast) !important; }
+
+.el-pagination button,
+.el-pagination .el-pager li {
+  border-radius: var(--iot-radius-sm) !important;
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast), transform var(--iot-transition-instant) !important;
+
+  &:active { transform: scale(0.94); }
+}
+
+/* ---------- 系统反馈 ---------- */
+.el-message,
+.el-notification {
+  border: 1px solid var(--iot-border-color-light) !important;
+  border-radius: var(--iot-radius-lg) !important;
+  background: var(--iot-bg-elevated) !important;
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-md) !important;
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(180%);
+}
+
+.el-loading-mask {
+  background: color-mix(in srgb, var(--iot-bg-page) 62%, transparent) !important;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.el-empty__description p { color: var(--iot-text-secondary) !important; }
+
 /* ============================================
-   过渡动画（Vue Router）
+   Vue Router：进入与退出遵循同一空间路径
    ============================================ */
 .fade-transform-enter-active,
 .fade-transform-leave-active {
-  transition: all 0.25s ease;
+  transition: opacity 220ms ease, transform 320ms var(--iot-ease-spring), filter 220ms ease;
 }
 
-.fade-transform-enter-from {
-  opacity: 0;
-  transform: translateX(-8px);
-}
-
+.fade-transform-enter-from,
 .fade-transform-leave-to {
   opacity: 0;
-  transform: translateX(8px);
+  filter: blur(2px);
+  transform: translateY(7px) scale(0.997);
 }
 
-/* 简单淡入淡出 */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.25s ease;
+  transition: opacity 200ms ease;
 }
 
 .fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
+.fade-leave-to { opacity: 0; }
 
 /* ============================================
-   响应式适配
+   响应式
    ============================================ */
-
-/* 平板端 (768px - 1024px) */
 @media screen and (max-width: 1024px) {
-  html {
-    font-size: 13px;
-  }
-
   .iot-page-header {
-    flex-direction: column;
     align-items: flex-start;
-    gap: var(--iot-spacing-sm);
   }
 
   .iot-grid--cards {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
   }
 }
 
-/* 移动端 (320px - 767px) */
 @media screen and (max-width: 767px) {
-  html {
-    font-size: 12px;
+  .iot-page-header {
+    flex-direction: column;
+    gap: var(--iot-spacing-md);
+    margin-bottom: var(--iot-spacing-lg);
   }
 
-  body {
-    line-height: 1.5;
-  }
+  .iot-page-subtitle { display: block; }
+  .iot-grid--cards,
+  .iot-grid--stats { grid-template-columns: 1fr; }
 
-  /* 隐藏非必要元素 */
-  .iot-page-subtitle {
-    display: none;
-  }
-
-  /* 表格响应式 */
-  .el-table {
-    font-size: 12px;
-  }
-
-  .el-table .el-table__cell {
-    padding: 8px 4px;
-  }
-
-  /* 卡片网格单列 */
-  .iot-grid--cards {
-    grid-template-columns: 1fr;
-  }
-
-  /* 统计卡片 */
-  .iot-grid--stats {
-    grid-template-columns: 1fr;
-  }
-
-  /* 表单在移动端全宽 */
-  .el-form-item__label {
-    width: 80px !important;
-    font-size: 12px;
-  }
-
-  .el-form-item__content {
-    margin-left: 80px !important;
-  }
-
-  /* 按钮组 */
   .filter-bar {
     flex-direction: column;
     align-items: stretch;
   }
 
   .filter-bar .el-select,
-  .filter-bar .el-input {
-    width: 100% !important;
-  }
+  .filter-bar .el-input { width: 100% !important; }
 
-  /* 弹窗全屏显示 */
   .el-dialog {
-    width: 95% !important;
-    margin: 10px auto !important;
+    width: calc(100% - 24px) !important;
+    max-height: calc(100vh - 24px);
+    margin: 12px auto !important;
   }
 
-  /* 操作按钮 */
-  .header-action-btn {
-    width: 36px;
-    height: 36px;
-  }
-
-  .user-menu-btn {
-    padding: 4px 8px 4px 2px;
-  }
-
-  /* 侧边栏 */
-  .app-sidebar {
-    width: 200px !important;
-  }
+  .el-table { font-size: var(--iot-font-size-xs); }
+  .el-table .el-table__cell { padding: 8px 4px; }
 }
 
-/* 超小屏幕 (< 375px) */
 @media screen and (max-width: 375px) {
-  .iot-card {
-    border-radius: var(--iot-radius-base);
-  }
-
+  .iot-card { border-radius: var(--iot-radius-base); }
   .iot-card__header,
-  .iot-card__body {
-    padding: var(--iot-spacing-sm) var(--iot-spacing-md);
+  .iot-card__body { padding: var(--iot-spacing-md); }
+}
+
+/* ============================================
+   动效、透明度与对比度无障碍回退
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 120ms !important;
+    transition-delay: 0ms !important;
   }
 
-  .el-button--small {
-    padding: 8px 12px;
-    font-size: 11px;
+  .fade-transform-enter-from,
+  .fade-transform-leave-to,
+  .iot-card--hover:hover,
+  .iot-card--hover:active,
+  .el-button:active:not(.is-disabled) {
+    filter: none !important;
+    transform: none !important;
   }
 }
 
-/* 打印样式 */
+@media (prefers-reduced-transparency: reduce) {
+  body { background: var(--iot-bg-page); }
+
+  .iot-card,
+  .el-overlay,
+  .el-dialog,
+  .el-message-box,
+  .el-drawer,
+  .el-popper,
+  .el-message,
+  .el-notification,
+  .el-loading-mask {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .iot-card,
+  .el-dialog,
+  .el-message-box,
+  .el-drawer,
+  .el-popper,
+  .el-message,
+  .el-notification {
+    border-width: 2px !important;
+    box-shadow: none !important;
+  }
+}
+
+/* ---------- 打印 ---------- */
 @media print {
   .app-header,
-  .app-sidebar {
-    display: none !important;
+  .app-sidebar { display: none !important; }
+
+  body {
+    color: #000;
+    background: #fff;
   }
 
   .iot-card {
-    box-shadow: none;
-    border: 1px solid #ddd;
-  }
-
-  body {
+    border: 1px solid #bbb;
     background: #fff;
-    color: #000;
+    box-shadow: none;
+    backdrop-filter: none;
   }
 }

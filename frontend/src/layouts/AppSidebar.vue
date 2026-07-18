@@ -3,21 +3,27 @@
     <!-- Logo 区域 -->
     <div class="app-sidebar__logo">
       <div class="logo-icon">
-        <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
-          <rect width="32" height="32" rx="8" fill="currentColor" opacity="0.15"/>
-          <circle cx="16" cy="13" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
-          <path d="M8 25c0-4.4 3.6-8 8-8s8 3.6 8 8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
-          <circle cx="24" cy="8" r="3" fill="currentColor" opacity="0.6"/>
-          <line x1="24" y1="5" x2="24" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          <line x1="27" y1="8" x2="29" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <svg viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true">
+          <rect x="2" y="2" width="28" height="28" rx="9" fill="currentColor" opacity="0.12"/>
+          <circle cx="16" cy="16" r="4" fill="currentColor"/>
+          <circle cx="9" cy="10" r="2" fill="currentColor" opacity="0.72"/>
+          <circle cx="24" cy="9" r="2" fill="currentColor" opacity="0.72"/>
+          <circle cx="23" cy="24" r="2" fill="currentColor" opacity="0.72"/>
+          <path d="M10.6 11.4 13.2 14M20 13.2l2.5-2.7M19.2 19.1l2.4 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
         </svg>
       </div>
       <transition name="fade">
-        <span v-show="!collapsed" class="logo-text">SprIoT_Platform</span>
+        <span v-show="!collapsed" class="logo-copy">
+          <strong class="logo-text">SprIoT</strong>
+          <small>Control Center</small>
+        </span>
       </transition>
     </div>
 
     <!-- 导航菜单 -->
+    <transition name="fade">
+      <div v-show="!collapsed" class="nav-section-label">{{ ls.locale === 'zh' ? '工作区' : 'Workspace' }}</div>
+    </transition>
     <el-menu
       :default-active="activeMenu"
       :collapse="collapsed"
@@ -63,7 +69,12 @@
 
     <!-- 底部折叠按钮 -->
     <div class="app-sidebar__footer">
-      <div class="collapse-btn" @click="$emit('toggle')">
+      <button
+        type="button"
+        class="collapse-btn"
+        :aria-label="collapsed ? (ls.locale === 'zh' ? '展开菜单' : 'Expand menu') : ls.t('nav.collapse')"
+        @click="$emit('toggle')"
+      >
         <el-icon :size="18">
           <Fold v-if="!collapsed" />
           <Expand v-else />
@@ -71,7 +82,7 @@
         <transition name="fade">
           <span v-show="!collapsed" class="collapse-text">{{ ls.t('nav.collapse') }}</span>
         </transition>
-      </div>
+      </button>
     </div>
   </div>
 </template>
@@ -113,80 +124,113 @@ const activeMenu = computed(() => {
 
 <style scoped>
 .app-sidebar {
-  width: var(--iot-sidebar-width);
-  height: 100vh;
-  background: var(--iot-bg-sidebar);
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1001;
   display: flex;
   flex-direction: column;
-  transition: width var(--iot-transition-base);
+  width: var(--iot-sidebar-width);
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: 1001;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-right: 1px solid var(--iot-border-color-light);
+  background: var(--iot-bg-sidebar);
+  box-shadow: inset -1px 0 0 var(--iot-highlight-edge), 12px 0 36px rgba(39, 33, 29, 0.035);
+  backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur-lg)) saturate(170%);
+  transition: width var(--iot-transition-base), background-color var(--iot-transition-base);
 }
 
 .app-sidebar--collapsed {
   width: var(--iot-sidebar-collapsed-width);
 }
 
-/* Logo */
 .app-sidebar__logo {
-  height: var(--iot-header-height);
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  gap: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 11px;
+  height: var(--iot-header-height);
   flex-shrink: 0;
   overflow: hidden;
+  padding: 0 17px;
 }
 
 .logo-icon {
-  width: 32px;
-  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--iot-color-primary);
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
-  background: var(--iot-color-primary-bg);
-  border-radius: var(--iot-radius-base);
+  border: 1px solid color-mix(in srgb, var(--iot-color-primary) 18%, var(--iot-border-color-light));
+  border-radius: 13px;
+  background: linear-gradient(145deg, var(--iot-bg-card-hover), var(--iot-color-primary-bg));
+  color: var(--iot-color-primary);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-xs);
+}
+
+.logo-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1;
 }
 
 .logo-text {
-  font-size: 15px;
-  font-weight: 600;
-  color: #F5F0EB;
+  color: var(--iot-text-primary);
+  font-family: var(--iot-font-display);
+  font-size: 16px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
   white-space: nowrap;
-  letter-spacing: -0.01em;
 }
 
-/* 菜单 */
+.logo-copy small {
+  margin-top: 5px;
+  color: var(--iot-text-secondary);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.095em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.nav-section-label {
+  height: 29px;
+  flex: none;
+  padding: 9px 21px 4px;
+  color: var(--iot-text-tertiary);
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .app-sidebar__menu {
   flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 6px 10px 12px;
   border-right: none !important;
   background: transparent !important;
-  padding: 10px 0;
-  overflow-y: auto;
-  overflow-x: hidden;
 }
 
-/* 覆盖 Element Plus Menu 样式 */
 .app-sidebar__menu :deep(.el-menu) {
-  background: transparent !important;
   border-right: none !important;
+  background: transparent !important;
 }
 
 .app-sidebar__menu :deep(.el-menu-item) {
-  height: 42px;
-  line-height: 42px;
-  margin: 2px 10px;
-  border-radius: var(--iot-radius-base);
+  position: relative;
+  height: 44px;
+  margin: 3px 0;
+  border: 1px solid transparent;
+  border-radius: 13px;
   color: var(--iot-sidebar-text);
-  transition: all var(--iot-transition-fast);
-  font-size: 13.5px;
+  font-size: var(--iot-font-size-sm);
+  line-height: 44px;
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast), border-color var(--iot-transition-fast), transform var(--iot-transition-instant), box-shadow var(--iot-transition-fast);
 }
 
 .app-sidebar__menu :deep(.el-menu-item:hover) {
@@ -194,10 +238,28 @@ const activeMenu = computed(() => {
   color: var(--iot-sidebar-text-active);
 }
 
+.app-sidebar__menu :deep(.el-menu-item:active) {
+  transform: scale(0.975);
+}
+
 .app-sidebar__menu :deep(.el-menu-item.is-active) {
+  border-color: var(--iot-border-color-light);
   background: var(--iot-sidebar-item-active);
   color: var(--iot-sidebar-text-active);
-  font-weight: 500;
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-xs);
+  font-weight: 610;
+}
+
+.app-sidebar__menu :deep(.el-menu-item.is-active::before) {
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  width: 3px;
+  height: 17px;
+  border-radius: var(--iot-radius-pill);
+  background: var(--iot-color-primary);
+  content: '';
+  transform: translateY(-50%);
 }
 
 .app-sidebar__menu :deep(.el-menu-item.is-active .el-icon) {
@@ -205,12 +267,11 @@ const activeMenu = computed(() => {
 }
 
 .app-sidebar__menu :deep(.el-menu-item .el-icon) {
-  font-size: 17px;
-  margin-right: 9px;
+  margin-right: 10px;
+  font-size: 18px;
 }
 
 .app-sidebar__menu :deep(.el-menu--collapse .el-menu-item) {
-  margin: 2px 8px;
   padding: 0 !important;
   justify-content: center;
 }
@@ -219,23 +280,27 @@ const activeMenu = computed(() => {
   margin-right: 0;
 }
 
-/* 底部折叠按钮 */
 .app-sidebar__footer {
-  padding: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
   flex-shrink: 0;
+  padding: 10px;
+  border-top: 1px solid var(--iot-separator);
 }
 
 .collapse-btn {
   display: flex;
   align-items: center;
+  width: 100%;
+  min-height: 42px;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: var(--iot-radius-base);
+  overflow: hidden;
+  padding: 8px 13px;
+  border: 0;
+  border-radius: 13px;
+  background: transparent;
   color: var(--iot-sidebar-text);
   cursor: pointer;
-  transition: all var(--iot-transition-fast);
-  overflow: hidden;
+  text-align: left;
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast), transform var(--iot-transition-instant);
 }
 
 .collapse-btn:hover {
@@ -243,18 +308,36 @@ const activeMenu = computed(() => {
   color: var(--iot-sidebar-text-active);
 }
 
+.collapse-btn:active { transform: scale(0.975); }
+
 .collapse-text {
-  font-size: 13px;
+  font-size: var(--iot-font-size-sm);
   white-space: nowrap;
 }
 
-/* Fade 过渡 */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity 180ms ease;
 }
+
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.app-sidebar--collapsed .app-sidebar__logo { padding: 0 18px; }
+.app-sidebar--collapsed .app-sidebar__menu { padding-inline: 10px; }
+.app-sidebar--collapsed .collapse-btn { justify-content: center; padding-inline: 0; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .app-sidebar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar__menu :deep(.el-menu-item:active),
+  .collapse-btn:active { transform: none; }
 }
 </style>

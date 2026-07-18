@@ -11,9 +11,10 @@
     <el-drawer
       v-model="appStore.sidebarDrawerVisible"
       direction="ltr"
-      :size="220"
+      size="min(86vw, 280px)"
       :show-close="false"
       :with-header="false"
+      :append-to-body="true"
       class="mobile-sidebar-drawer"
     >
       <AppSidebar
@@ -81,16 +82,33 @@ onUnmounted(() => {
 
 <style scoped>
 .app-layout {
+  position: relative;
   min-height: 100vh;
 }
 
 .app-layout__content {
-  transition: margin-left var(--iot-transition-base);
   min-height: 100vh;
+  min-width: 0;
+  transition: margin-left var(--iot-transition-base);
 }
 
 /* 移动端抽屉内侧边栏样式修正 */
-:deep(.mobile-sidebar-drawer .el-drawer__body) {
+:global(.mobile-sidebar-drawer .el-drawer__body) {
   padding: 0;
+}
+
+:global(.mobile-sidebar-drawer) {
+  overflow: hidden;
+  border: 0;
+  border-radius: 0 var(--iot-radius-xl) var(--iot-radius-xl) 0;
+}
+
+:global(.mobile-sidebar-drawer .app-sidebar) {
+  position: relative;
+  width: 100% !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-layout__content { transition: none; }
 }
 </style>
