@@ -10,77 +10,101 @@ nodes:
   # ── 传感器 ────────────────────────────────────────────────
 
   # 1. 反应器进口温压（高温高压侧，进口温度约 560-620°C）
-  - module: temp_pressure_sensor
+  - module: generic_sensor
     id: ST-TP-R01-IN
     sampling_interval: 15
     status_report_interval: 60
-    waveforms:
+    fields:
       temperature:
-        type: sine
-        min: 560.0
-        max: 620.0
-        period: 3600
-        jitter: 2.0
+        waveform:
+          type: sine
+          min: 560.0
+          max: 620.0
+          period: 3600
+          jitter: 2.0
+        precision: 1
+        unit: °C
       pressure:
-        type: random_walk
-        start: 88.0
-        step: 0.8
-        bounds: [75.0, 100.0]
+        waveform:
+          type: random_walk
+          start: 88.0
+          step: 0.8
+          bounds: [75.0, 100.0]
+        precision: 2
+        unit: kPa
 
   # 2. 反应器出口温压（脱氢吸热，温度比进口低 50-80°C）
-  - module: temp_pressure_sensor
+  - module: generic_sensor
     id: ST-TP-R01-OUT
     sampling_interval: 15
     status_report_interval: 60
-    waveforms:
+    fields:
       temperature:
-        type: sine
-        min: 490.0
-        max: 555.0
-        period: 3600
-        phase: 600        # 与进口错相，体现传输时延
-        jitter: 2.0
+        waveform:
+          type: sine
+          min: 490.0
+          max: 555.0
+          period: 3600
+          phase: 600        # 与进口错相，体现传输时延
+          jitter: 2.0
+        precision: 1
+        unit: °C
       pressure:
-        type: random_walk
-        start: 65.0
-        step: 0.6
-        bounds: [55.0, 78.0]
+        waveform:
+          type: random_walk
+          start: 65.0
+          step: 0.6
+          bounds: [55.0, 78.0]
+        precision: 2
+        unit: kPa
 
   # 3. 换热器出口温压（废热回收后，进入冷凝器前，约 80-120°C）
-  - module: temp_pressure_sensor
+  - module: generic_sensor
     id: ST-TP-HE01
     sampling_interval: 20
     status_report_interval: 60
-    waveforms:
+    fields:
       temperature:
-        type: sine
-        min: 85.0
-        max: 115.0
-        period: 1800
-        jitter: 1.0
+        waveform:
+          type: sine
+          min: 85.0
+          max: 115.0
+          period: 1800
+          jitter: 1.0
+        precision: 1
+        unit: °C
       pressure:
-        type: random_walk
-        start: 60.0
-        step: 0.4
-        bounds: [50.0, 72.0]
+        waveform:
+          type: random_walk
+          start: 60.0
+          step: 0.4
+          bounds: [50.0, 72.0]
+        precision: 2
+        unit: kPa
 
   # 4. 冷凝器出口温压（产品冷凝，约 25-45°C）
-  - module: temp_pressure_sensor
+  - module: generic_sensor
     id: ST-TP-CD01
     sampling_interval: 20
     status_report_interval: 60
-    waveforms:
+    fields:
       temperature:
-        type: random_walk
-        start: 35.0
-        step: 0.5
-        bounds: [25.0, 45.0]
+        waveform:
+          type: random_walk
+          start: 35.0
+          step: 0.5
+          bounds: [25.0, 45.0]
+        precision: 1
+        unit: °C
       pressure:
-        type: sine
-        min: 50.0
-        max: 62.0
-        period: 900
-        jitter: 0.3
+        waveform:
+          type: sine
+          min: 50.0
+          max: 62.0
+          period: 900
+          jitter: 0.3
+        precision: 2
+        unit: kPa
 
   # 5. 乙苯进料流量（工艺设计值约 50 L/min，允许 ±10% 波动）
   - module: flow_sensor

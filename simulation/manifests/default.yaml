@@ -40,13 +40,13 @@ nodes:
     status_report_interval: 60
     initial_levels: {D5: low, D6: high, D7: low}
 
-  - module: temp_pressure_sensor
+  - module: generic_sensor
     id: TP-KPA-001
     sampling_interval: 15
     status_report_interval: 60
-    waveforms:
-      temperature: {type: sine, min: 25, max: 55, period: 1800, jitter: 0.5}
-      pressure:    {type: random_walk, start: 250, step: 2, bounds: [200, 300]}
+    fields:
+      temperature: {waveform: {type: sine, min: 25, max: 55, period: 1800, jitter: 0.5}, precision: 1, unit: °C}
+      pressure:    {waveform: {type: random_walk, start: 250, step: 2, bounds: [200, 300]}, precision: 2, unit: kPa}
 
   # ───── 声明式通用节点示例：数据/状态字段全部由配置定义，无需写代码 ─────
 

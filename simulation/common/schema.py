@@ -16,7 +16,8 @@ ParamSpec.type 取值：
   LABEL               GUI 展示名（如 "DHT11 温湿度传感器"）
   SUPPORTED_COMMANDS  支持的控制命令列表（含参数说明），供 GUI 渲染快捷命令按钮
 """
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 from common.waveforms import validate_waveform_config
@@ -51,7 +52,11 @@ class ParamSpec:
 
 
 def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return (
+        isinstance(v, (int, float))
+        and not isinstance(v, bool)
+        and math.isfinite(v)
+    )
 
 
 def _check_scalar(spec: ParamSpec, value, path: str) -> List[str]:

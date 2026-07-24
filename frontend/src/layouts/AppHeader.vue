@@ -481,21 +481,21 @@ async function handleLogout() {
 
 .theme-dot {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
-  margin-right: 6px;
-  border-radius: var(--iot-radius-round);
+  margin-right: 8px;
+  border-radius: 50%;
 }
 
 .theme-dot--apple {
-  border: 1px solid rgba(65, 54, 46, 0.14);
-  background: linear-gradient(135deg, #fbfaf8 0 48%, #d96845 50% 100%);
+  background: #e5663d;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .theme-dot--classic {
-  border: 1px solid rgba(22, 113, 217, 0.2);
-  background: linear-gradient(135deg, #f4f8ff 0 48%, #1671d9 50% 100%);
+  background: #1671d9;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .check-icon {

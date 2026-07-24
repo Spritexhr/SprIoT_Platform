@@ -17,11 +17,14 @@
 """
 import json
 import logging
+import math
 import threading
 import time
 from typing import Optional
 
 import paho.mqtt.client as mqtt
+
+from common.mqtt_compat import create_client, reason_code_value
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +43,7 @@ class MqttNode:
         port: int = 1883,
         username: str = "",
         password: str = "",
-        status_report_interval: int = 120,
+        status_report_interval: float = 120,
     ):
         if not self.NODE_TYPE or not self.ID_FIELD:
             raise NotImplementedError("子类必须设置 NODE_TYPE 和 ID_FIELD")
@@ -48,14 +51,17 @@ class MqttNode:
         self.node_id = node_id
         self.broker = broker
         self.port = port
-        self.status_report_interval = status_report_interval
+        interval = self.coerce_number(status_report_interval)
+        if interval is None or interval <= 0:
+            raise ValueError(f"status_report_interval 必须是大于 0 的有限数字，收到 {status_report_interval!r}")
+        self.status_report_interval = interval
 
         # 主题模板与 .ino 中一致
         self.topic_control = f"iot/{self.NODE_TYPE}s/{node_id}/control"
         self.topic_status = f"iot/{self.NODE_TYPE}s/{node_id}/status"
 
         # client_id 模仿固件: WemosD1-<id>
-        self.client = mqtt.Client(client_id=f"WemosD1-{node_id}")
+        self.client = create_client(client_id=f"WemosD1-{node_id}")
         if username:
             self.client.username_pw_set(username, password)
         self.client.on_connect = self._on_connect
@@ -75,6 +81,17 @@ class MqttNode:
     def now_ts() -> int:
         return int(time.time())
 
+    @staticmethod
+    def coerce_number(value, default=None) -> Optional[float]:
+        """把 MQTT/配置里的连续数值安全转换为有限浮点数，拒绝 bool、NaN 与无穷大。"""
+        if isinstance(value, bool):
+            return default
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return default
+        return number if math.isfinite(number) else default
+
     # ============ 抽象接口 ============
     def build_status_payload(self) -> dict:
         raise NotImplementedError
@@ -87,7 +104,8 @@ class MqttNode:
         pass
 
     # ============ MQTT 回调 ============
-    def _on_connect(self, client, userdata, flags, rc):
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        rc = reason_code_value(reason_code)
         if rc == 0:
             log.info(f"[{self.node_id}] ✓ MQTT 已连接 {self.broker}:{self.port}")
             client.subscribe(self.topic_control)
@@ -97,7 +115,18 @@ class MqttNode:
         else:
             log.error(f"[{self.node_id}] ✗ MQTT 连接失败 rc={rc}")
 
-    def _on_disconnect(self, client, userdata, rc):
+    def _on_disconnect(
+        self,
+        client,
+        userdata,
+        disconnect_flags_or_rc,
+        reason_code=None,
+        properties=None,
+    ):
+        # Paho 1.x: 第 3 个参数就是 rc；2.x: 第 4 个参数是 ReasonCode。
+        rc = reason_code_value(
+            disconnect_flags_or_rc if reason_code is None else reason_code
+        )
         if rc != 0:
             log.warning(f"[{self.node_id}] ⚠ MQTT 意外断开 rc={rc}，自动重连中…")
 

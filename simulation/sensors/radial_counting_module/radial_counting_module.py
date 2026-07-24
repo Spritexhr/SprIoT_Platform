@@ -24,7 +24,7 @@ class RadialCountingModule(TouchSensorSwitch):
 
     # 覆写 schema：翻转周期默认值与触摸开关不同
     PARAMS_SCHEMA = [
-        ParamSpec("status_report_interval", "int", label="心跳间隔(秒)",
+        ParamSpec("status_report_interval", "float", label="心跳间隔(秒)",
                   default=TouchSensorSwitch.DEFAULT_STATUS_REPORT_INTERVAL, min=5, max=86400),
         ParamSpec("flip_period_s", "float", label="翻转周期(秒)",
                   default=DEFAULT_FLIP_PERIOD_S, min=0.5,
@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
-    parser.add_argument("--status-report-interval", type=int,
+    parser.add_argument("--status-report-interval", type=float,
                         default=RadialCountingModule.DEFAULT_STATUS_REPORT_INTERVAL)
     parser.add_argument("--flip-period-s", type=float,
                         default=RadialCountingModule.DEFAULT_FLIP_PERIOD_S)

@@ -23,6 +23,13 @@ async function api(method, url, body) {
 
 function clone(obj) { return JSON.parse(JSON.stringify(obj ?? null)); }
 
+function parseNumericInput(raw, integer = false) {
+  if (raw === '' || raw === null || raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return undefined;
+  return integer ? Math.trunc(value) : value;
+}
+
 /* 固定种子伪随机（random_walk / uniform 预览用，保证重绘稳定） */
 function mulberry32(seed) {
   return function () {
@@ -157,14 +164,16 @@ const WaveformEditor = {
     function setParam(name, raw, ptype) {
       const next = clone(wf.value);
       if (ptype === 'range') return; // range 由 setRange 处理
-      next[name] = raw === '' ? undefined : +raw;
+      next[name] = parseNumericInput(raw);
       if (next[name] === undefined) delete next[name];
       emit('update:modelValue', next);
     }
     function setRange(name, idx, raw) {
       const next = clone(wf.value);
       const cur = Array.isArray(next[name]) ? next[name] : [0, 100];
-      cur[idx] = +raw;
+      const value = parseNumericInput(raw);
+      if (value === undefined) return;
+      cur[idx] = value;
       next[name] = cur;
       emit('update:modelValue', next);
     }
@@ -202,7 +211,7 @@ const WaveformEditor = {
         </label>
       </template>
     </div>
-    <canvas ref="canvasEl" class="wf-canvas"></canvas>
+    <canvas ref="canvasEl" class="wf-canvas" role="img" :aria-label="(fieldName || '数据') + '波形预览'"></canvas>
     <div class="wf-hint" v-if="wf.type === 'random_walk'">随机游走为示意轨迹，实际运行轨迹不同；虚线为上下界。</div>
   </div>`
 };
@@ -306,9 +315,13 @@ const ParamForm = {
 
     function setScalar(spec, raw) {
       if (raw === '' || raw === null) { delete props.params[spec.name]; return; }
-      if (spec.type === 'int') props.params[spec.name] = parseInt(raw, 10);
-      else if (spec.type === 'float') props.params[spec.name] = +raw;
-      else props.params[spec.name] = raw;
+      if (spec.type === 'int' || spec.type === 'float') {
+        const value = parseNumericInput(raw, spec.type === 'int');
+        if (value === undefined) delete props.params[spec.name];
+        else props.params[spec.name] = value;
+        return;
+      }
+      props.params[spec.name] = raw;
     }
 
     return {
@@ -477,8 +490,8 @@ const NodeModal = {
              errors, warnings, saving, modMeta, formKey, validate, save };
   },
   template: `
-  <div class="modal-mask" @click.self="$emit('close')">
-    <div class="modal">
+  <div class="modal-mask" @click.self="$emit('close')" @keydown.esc="$emit('close')">
+    <div class="modal" role="dialog" aria-modal="true" :aria-label="isEdit ? '编辑节点' : '新建节点'">
       <div class="modal-head">
         <h3>{{ isEdit ? '编辑节点' : '新建节点' }}</h3>
       </div>
@@ -648,12 +661,12 @@ const ManagePage = {
             <button class="btn sm primary" @click="openGroupModal(null)">新建</button>
           </div>
         </div>
-        <div v-for="g in groups" :key="g.id"
+        <button v-for="g in groups" :key="g.id" type="button"
              :class="['group-item', { active: g.id === currentGid }]"
              @click="currentGid = g.id">
           <span>{{ g.name }}</span>
           <span class="cnt">{{ g.node_count }} 节点</span>
-        </div>
+        </button>
         <div v-if="!groups.length" class="empty">还没有分组<br>点"新建"或"导入"开始</div>
       </div>
 
@@ -680,10 +693,10 @@ const ManagePage = {
               <td class="mono">{{ n.node_id }}</td>
               <td>{{ moduleLabel(n.module) }}</td>
               <td>
-                <span :class="['pill', n.enabled ? 'green' : 'gray']"
-                      style="cursor:pointer" @click="toggleEnabled(n)">
+                <button type="button" :class="['pill', n.enabled ? 'green' : 'gray']"
+                        @click="toggleEnabled(n)">
                   {{ n.enabled ? '启用' : '禁用' }}
-                </span>
+                </button>
               </td>
               <td>
                 <div class="param-tags">
@@ -713,8 +726,8 @@ const ManagePage = {
                 @close="showNodeModal = false"
                 @saved="showNodeModal = false; loadNodes(); loadGroups(true)"></node-modal>
 
-    <div class="modal-mask" v-if="showGroupModal" @click.self="showGroupModal = false">
-      <div class="modal" style="width:480px">
+    <div class="modal-mask" v-if="showGroupModal" @click.self="showGroupModal = false" @keydown.esc="showGroupModal = false">
+      <div class="modal" style="width:480px" role="dialog" aria-modal="true" aria-label="分组设置">
         <div class="modal-head">
           <h3>{{ groupForm.id ? '编辑分组' : '新建分组' }}</h3>
         </div>
@@ -737,8 +750,8 @@ const ManagePage = {
       </div>
     </div>
 
-    <div class="modal-mask" v-if="showImport" @click.self="showImport = false">
-      <div class="modal" style="width:640px">
+    <div class="modal-mask" v-if="showImport" @click.self="showImport = false" @keydown.esc="showImport = false">
+      <div class="modal" style="width:640px" role="dialog" aria-modal="true" aria-label="导入 manifest YAML">
         <div class="modal-head">
           <h3>导入 manifest YAML</h3>
         </div>
@@ -794,8 +807,8 @@ const MonitorPage = {
       const { node, cmd, args } = cmdModal.value;
       const out = {};
       for (const a of cmd.args) {
-        out[a.name] = (a.type === 'int') ? parseInt(args[a.name], 10)
-          : (a.type === 'float') ? +args[a.name] : args[a.name];
+        out[a.name] = (a.type === 'int') ? parseNumericInput(args[a.name], true)
+          : (a.type === 'float') ? parseNumericInput(args[a.name]) : args[a.name];
       }
       emit('send-command', node, cmd.command, out);
       cmdModal.value = null;
@@ -918,8 +931,8 @@ const MonitorPage = {
       <div v-if="!liveNodes.length" class="empty">还没有收到任何节点的 MQTT 消息</div>
     </div>
 
-    <div class="modal-mask" v-if="cmdModal" @click.self="cmdModal = null">
-      <div class="modal" style="width:400px">
+    <div class="modal-mask" v-if="cmdModal" @click.self="cmdModal = null" @keydown.esc="cmdModal = null">
+      <div class="modal" style="width:400px" role="dialog" aria-modal="true" aria-label="发送节点命令">
         <div class="modal-head">
           <h3>{{ cmdModal.cmd.label }} → {{ cmdModal.node.node_id }}</h3>
         </div>
@@ -1077,10 +1090,10 @@ const SettingsPage = {
     return { brokers, form, showForm, testing, openForm, save, remove, test, importConfig };
   },
   template: `
-  <div class="card" style="max-width:760px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+  <div class="card settings-card">
+    <div class="settings-card-head">
       <h3 style="margin:0">Broker 配置</h3>
-      <div>
+      <div class="settings-card-actions">
         <button class="btn sm" @click="importConfig">导入 config.yaml</button>
         <button class="btn sm primary" @click="openForm(null)">新建</button>
       </div>
@@ -1107,29 +1120,31 @@ const SettingsPage = {
       还没有 broker —— 新建一个，或从 simulation/config.yaml 导入
     </div>
 
-    <div class="modal-mask" v-if="showForm" @click.self="showForm = false">
-      <div class="modal" style="width:440px">
-        <div class="modal-head">
-          <h3>{{ form.id ? '编辑' : '新建' }} broker</h3>
-        </div>
-        <div class="modal-body">
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <label class="fl">名称 <input v-model="form.name" placeholder="如 本地 EMQX"></label>
-            <label class="fl">主机 <input v-model="form.host" class="mono" placeholder="127.0.0.1"></label>
-            <label class="fl">端口 <input type="number" v-model="form.port"></label>
-            <label class="fl">账号（可选）<input v-model="form.username"></label>
-            <label class="fl">密码（可选）<input v-model="form.password" type="password"></label>
-            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);margin-top:4px">
-              <input type="checkbox" v-model="form.is_default" style="margin:0"> 设为默认（monitor 与未绑定分组使用）
-            </label>
+    <teleport to="body">
+      <div class="modal-mask" v-if="showForm" @click.self="showForm = false" @keydown.esc="showForm = false">
+        <div class="modal broker-modal" role="dialog" aria-modal="true" aria-label="Broker 设置">
+          <div class="modal-head">
+            <h3>{{ form.id ? '编辑' : '新建' }} broker</h3>
+          </div>
+          <div class="modal-body">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <label class="fl">名称 <input v-model="form.name" placeholder="如 本地 EMQX"></label>
+              <label class="fl">主机 <input v-model="form.host" class="mono" placeholder="127.0.0.1"></label>
+              <label class="fl">端口 <input type="number" v-model="form.port"></label>
+              <label class="fl">账号（可选）<input v-model="form.username"></label>
+              <label class="fl">密码（可选）<input v-model="form.password" type="password"></label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);margin-top:4px">
+                <input type="checkbox" v-model="form.is_default" style="margin:0"> 设为默认（monitor 与未绑定分组使用）
+              </label>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn" @click="showForm = false">取消</button>
+            <button class="btn primary" @click="save">保存</button>
           </div>
         </div>
-        <div class="modal-foot">
-          <button class="btn" @click="showForm = false">取消</button>
-          <button class="btn primary" @click="save">保存</button>
-        </div>
       </div>
-    </div>
+    </teleport>
   </div>`
 };
 
@@ -1139,12 +1154,13 @@ createApp({
   components: { ManagePage, MonitorPage, LogsPage, SettingsPage },
   setup() {
     const tabs = [
-      { key: 'manage', label: '节点管理' },
-      { key: 'monitor', label: '运行监控' },
-      { key: 'logs', label: '日志' },
-      { key: 'settings', label: '设置' },
+      { key: 'manage', label: '节点管理', description: '编排分组、节点参数与波形，然后以独立进程启动仿真。' },
+      { key: 'monitor', label: '运行监控', description: '查看 MQTT 实时状态、遥测数据，并向在线节点发送控制命令。' },
+      { key: 'logs', label: '运行日志', description: '跟随进程输出，快速定位连接、校验与命令处理问题。' },
+      { key: 'settings', label: '连接设置', description: '管理 Broker 连接资料与模拟器默认通信入口。' },
     ];
     const tab = ref('manage');
+    const currentTab = computed(() => tabs.find(item => item.key === tab.value) || tabs[0]);
     const meta = ref([]);
     const waveformSchemas = ref({});
     const runs = ref([]);
@@ -1153,7 +1169,10 @@ createApp({
     const monitorConnected = ref(false);
     const wsStatus = ref('connecting');
     const toasts = ref([]);
+    const isSwitchingView = ref(false);
     let toastSeq = 0;
+    let activeViewTransition = null;
+    let fallbackMotionTimer = null;
 
     const wsStatusText = computed(() => ({
       connecting: '连接中', open: '已连接', closed: '已断开',
@@ -1165,6 +1184,40 @@ createApp({
       setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 4000);
     }
     window.__toast = toast;
+
+    async function switchTab(nextTab) {
+      if (nextTab === tab.value || !tabs.some(item => item.key === nextTab)) return;
+
+      const updateTab = async () => {
+        tab.value = nextTab;
+        await nextTick();
+      };
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduceMotion) {
+        await updateTab();
+        return;
+      }
+      if (!document.startViewTransition) {
+        clearTimeout(fallbackMotionTimer);
+        isSwitchingView.value = false;
+        await nextTick();
+        await updateTab();
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        isSwitchingView.value = true;
+        fallbackMotionTimer = setTimeout(() => {
+          isSwitchingView.value = false;
+        }, 200);
+        return;
+      }
+
+      activeViewTransition?.skipTransition();
+      const transition = document.startViewTransition(updateTab);
+      activeViewTransition = transition;
+      transition.finished.finally(() => {
+        if (activeViewTransition === transition) activeViewTransition = null;
+      });
+      await transition.updateCallbackDone;
+    }
 
     /* --- 日志事件（环形缓冲） --- */
     const logEvents = ref([]);
@@ -1232,7 +1285,7 @@ createApp({
       try {
         const r = await api('POST', '/api/runs', { group_ids: groupIds });
         toast(`run #${r.id} 已启动 (pid ${r.pid})`);
-        tab.value = 'monitor';
+        await switchTab('monitor');
         await refreshAll();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -1256,12 +1309,15 @@ createApp({
       await refreshAll();
       connectWs();
     });
-    onBeforeUnmount(() => { ws && ws.close(); });
+    onBeforeUnmount(() => {
+      clearTimeout(fallbackMotionTimer);
+      ws && ws.close();
+    });
 
     return {
-      tabs, tab, meta, waveformSchemas, runs, live, moduleMap,
-      monitorConnected, wsStatus, wsStatusText, toasts, logEvents,
-      startRun, stopRun, sendCommand, refreshLive, refreshAll,
+      tabs, tab, currentTab, meta, waveformSchemas, runs, live, moduleMap,
+      monitorConnected, wsStatus, wsStatusText, toasts, logEvents, isSwitchingView,
+      switchTab, startRun, stopRun, sendCommand, refreshLive, refreshAll,
     };
   },
 }).mount('#app');

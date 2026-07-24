@@ -38,7 +38,7 @@ class PinControl(MqttNode):
     DEFAULT_STATUS_REPORT_INTERVAL = 120
 
     PARAMS_SCHEMA = [
-        ParamSpec("status_report_interval", "int", label="心跳间隔(秒)",
+        ParamSpec("status_report_interval", "float", label="心跳间隔(秒)",
                   default=DEFAULT_STATUS_REPORT_INTERVAL, min=5, max=86400),
         ParamSpec("initial_levels", "dict", label="初始电平",
                   default={"D5": "low", "D6": "low", "D7": "low"},
@@ -54,7 +54,7 @@ class PinControl(MqttNode):
         {"command": "low_all", "label": "全部置低"},
         {"command": "current_status", "label": "查询状态"},
         {"command": "set_status_interval", "label": "设置心跳间隔",
-         "args": [{"name": "interval", "type": "int", "min": 30, "max": 600}]},
+         "args": [{"name": "interval", "type": "float", "min": 30, "max": 600}]},
     ]
 
     def __init__(
@@ -64,7 +64,7 @@ class PinControl(MqttNode):
         port: int = 1883,
         username: str = "",
         password: str = "",
-        status_report_interval: int = DEFAULT_STATUS_REPORT_INTERVAL,
+        status_report_interval: float = DEFAULT_STATUS_REPORT_INTERVAL,
         initial_levels: Optional[dict] = None,
     ):
         super().__init__(
@@ -127,7 +127,7 @@ class PinControl(MqttNode):
             self.publish_status("check_current_level", check_code)
 
         elif command == "set_status_interval":
-            interval = int(payload.get("interval", 0))
+            interval = self.coerce_number(payload.get("interval"), 0.0)
             if 30 <= interval <= 600:
                 self.status_report_interval = interval
                 log.info(f"[{self.node_id}] ✓ statusReportInterval → {interval}s")
@@ -146,7 +146,7 @@ def main():
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
-    parser.add_argument("--status-report-interval", type=int,
+    parser.add_argument("--status-report-interval", type=float,
                         default=PinControl.DEFAULT_STATUS_REPORT_INTERVAL)
     args = parser.parse_args()
 

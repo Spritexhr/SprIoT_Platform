@@ -152,7 +152,11 @@ WAVEFORM_SCHEMAS = {
 
 
 def _is_number(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return (
+        isinstance(v, (int, float))
+        and not isinstance(v, bool)
+        and math.isfinite(v)
+    )
 
 
 def validate_waveform_config(cfg, path: str = "波形") -> list:

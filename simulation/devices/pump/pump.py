@@ -35,7 +35,7 @@ class Pump(MqttNode):
     DEFAULT_RAMP_RATE_KW_PER_S = 5.0 # 每秒变化最大 5 kW，模拟启停渐变
 
     PARAMS_SCHEMA = [
-        ParamSpec("status_report_interval", "int", label="心跳间隔(秒)",
+        ParamSpec("status_report_interval", "float", label="心跳间隔(秒)",
                   default=DEFAULT_STATUS_REPORT_INTERVAL, min=5, max=86400),
         ParamSpec("max_power_kw", "float", label="额定功率(kW)",
                   default=DEFAULT_MAX_POWER_KW, min=0.1),
@@ -53,7 +53,7 @@ class Pump(MqttNode):
          "args": [{"name": "val", "type": "float", "min": 0}]},
         {"command": "current_status", "label": "查询状态"},
         {"command": "set_status_interval", "label": "设置心跳间隔",
-         "args": [{"name": "interval", "type": "int", "min": 30, "max": 600}]},
+         "args": [{"name": "interval", "type": "float", "min": 30, "max": 600}]},
     ]
 
     def __init__(
@@ -63,7 +63,7 @@ class Pump(MqttNode):
         port: int = 1883,
         username: str = "",
         password: str = "",
-        status_report_interval: int = DEFAULT_STATUS_REPORT_INTERVAL,
+        status_report_interval: float = DEFAULT_STATUS_REPORT_INTERVAL,
         max_power_kw: float = DEFAULT_MAX_POWER_KW,
         ramp_rate_kw_per_s: float = DEFAULT_RAMP_RATE_KW_PER_S,
         initial_power_kw: float = 0.0,
@@ -126,7 +126,7 @@ class Pump(MqttNode):
             self.publish_status("check_current_status", check_code)
 
         elif command == "set_status_interval":
-            interval = int(payload.get("interval", 0))
+            interval = self.coerce_number(payload.get("interval"), 0.0)
             if 30 <= interval <= 600:
                 self.status_report_interval = interval
                 log.info(f"[{self.node_id}] ✓ statusReportInterval → {interval}s")
@@ -159,9 +159,11 @@ def main():
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
-    parser.add_argument("--status-report-interval", type=int,
+    parser.add_argument("--status-report-interval", type=float,
                         default=Pump.DEFAULT_STATUS_REPORT_INTERVAL)
     parser.add_argument("--max-power-kw", type=float, default=Pump.DEFAULT_MAX_POWER_KW)
+    parser.add_argument("--ramp-rate-kw-per-s", type=float, default=Pump.DEFAULT_RAMP_RATE_KW_PER_S)
+    parser.add_argument("--initial-power-kw", type=float, default=0.0)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -174,6 +176,8 @@ def main():
         password=args.password,
         status_report_interval=args.status_report_interval,
         max_power_kw=args.max_power_kw,
+        ramp_rate_kw_per_s=args.ramp_rate_kw_per_s,
+        initial_power_kw=args.initial_power_kw,
     )
     try:
         node.run()

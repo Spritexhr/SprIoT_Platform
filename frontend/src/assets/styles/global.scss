@@ -668,18 +668,47 @@ a {
 .el-empty__description p { color: var(--iot-text-secondary) !important; }
 
 /* ============================================
-   Vue Router：进入与退出遵循同一空间路径
+   Vue Router：新旧页面交叠过渡，避免空白帧和瞬间刷新感
    ============================================ */
-.fade-transform-enter-active,
-.fade-transform-leave-active {
-  transition: opacity 220ms ease, transform 320ms var(--iot-ease-spring), filter 220ms ease;
+.fade-transform-enter-active {
+  position: relative;
+  z-index: 2;
+  transform-origin: top center;
+  will-change: opacity, transform;
+  transition: opacity 240ms ease-out, transform 280ms var(--iot-ease-spring);
 }
 
-.fade-transform-enter-from,
+.fade-transform-leave-active {
+  position: absolute;
+  z-index: 1;
+  top: var(--app-main-padding-top);
+  right: var(--app-main-padding-inline);
+  left: var(--app-main-padding-inline);
+  transform-origin: top center;
+  will-change: opacity, transform;
+  pointer-events: none;
+  transition: opacity 160ms ease-out, transform 180ms ease-out;
+}
+
+.fade-transform-enter-from {
+  opacity: 0;
+  transform: translateY(5px) scale(0.998);
+}
+
 .fade-transform-leave-to {
   opacity: 0;
-  filter: blur(2px);
-  transform: translateY(7px) scale(0.997);
+  transform: translateY(-2px) scale(0.999);
+}
+
+.fade-transform-enter-to,
+.fade-transform-leave-from {
+  opacity: 1;
+  transform: none;
+}
+
+.fade-transform-enter-active,
+.fade-transform-leave-active {
+  backface-visibility: hidden;
 }
 
 .fade-enter-active,

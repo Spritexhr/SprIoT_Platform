@@ -23,12 +23,13 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from webui import db, manifest_io, process_manager
 from webui.mqtt_monitor import MqttMonitor
+from common.mqtt_compat import create_client
 
 try:
     from common.waveforms import WAVEFORM_SCHEMAS
@@ -103,6 +104,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="IoT Simulation WebUI", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def prevent_webui_asset_version_skew(request, call_next):
+    """本地管理工具优先保证 HTML/CSS/JS 同版本，避免浏览器复用旧脚本导致白屏。"""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 # ============ pydantic 模型 ============
 
 class BrokerIn(BaseModel):
@@ -124,7 +135,7 @@ class NodeIn(BaseModel):
     module: str
     node_id: str
     enabled: bool = True
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
     username: Optional[str] = None
     password: Optional[str] = None
     sort_order: int = 0
@@ -133,7 +144,7 @@ class NodeIn(BaseModel):
 class NodeValidateIn(BaseModel):
     module: str
     node_id: str = ""
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
 
 
 class RunIn(BaseModel):
@@ -147,7 +158,7 @@ class ImportIn(BaseModel):
 
 class CommandIn(BaseModel):
     command: str
-    args: dict = {}
+    args: dict = Field(default_factory=dict)
 
 
 # ============ meta ============
@@ -199,8 +210,7 @@ def brokers_test(broker_id: int):
     broker = db.get_broker(broker_id)
     if not broker:
         raise HTTPException(404, "broker 不存在")
-    import paho.mqtt.client as mqtt
-    client = mqtt.Client(client_id=f"sim-webui-test-{os.getpid()}")
+    client = create_client(client_id=f"sim-webui-test-{os.getpid()}")
     if broker.get("username"):
         client.username_pw_set(broker["username"], broker.get("password", ""))
     try:

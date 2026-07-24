@@ -43,9 +43,9 @@ class GenericSensor(MqttNode):
     DEFAULT_STATUS_REPORT_INTERVAL = 120
 
     PARAMS_SCHEMA = [
-        ParamSpec("sampling_interval", "int", label="采样间隔(秒)",
+        ParamSpec("sampling_interval", "float", label="采样间隔(秒)",
                   default=DEFAULT_SAMPLING_INTERVAL, min=1, max=86400),
-        ParamSpec("status_report_interval", "int", label="心跳间隔(秒)",
+        ParamSpec("status_report_interval", "float", label="心跳间隔(秒)",
                   default=DEFAULT_STATUS_REPORT_INTERVAL, min=5, max=86400),
         ParamSpec("fields", "fields_map", label="数据字段", required=True,
                   help="每个字段配置 waveform（必填）、precision(0-6, 默认2)、unit(仅展示)"),
@@ -55,9 +55,9 @@ class GenericSensor(MqttNode):
         {"command": "enable", "label": "启用"},
         {"command": "disable", "label": "禁用"},
         {"command": "set_interval", "label": "设置采样间隔",
-         "args": [{"name": "interval", "type": "int", "min": 5, "max": 3600}]},
+         "args": [{"name": "interval", "type": "float", "min": 5, "max": 3600}]},
         {"command": "set_status_interval", "label": "设置心跳间隔",
-         "args": [{"name": "interval", "type": "int", "min": 30, "max": 600}]},
+         "args": [{"name": "interval", "type": "float", "min": 30, "max": 600}]},
     ]
 
     def __init__(
@@ -67,8 +67,8 @@ class GenericSensor(MqttNode):
         port: int = 1883,
         username: str = "",
         password: str = "",
-        sampling_interval: int = DEFAULT_SAMPLING_INTERVAL,
-        status_report_interval: int = DEFAULT_STATUS_REPORT_INTERVAL,
+        sampling_interval: float = DEFAULT_SAMPLING_INTERVAL,
+        status_report_interval: float = DEFAULT_STATUS_REPORT_INTERVAL,
         fields: Optional[dict] = None,
     ):
         super().__init__(
@@ -110,7 +110,7 @@ class GenericSensor(MqttNode):
 
     def handle_command(self, command: str, payload: dict, check_code: Optional[str]) -> None:
         if command in ("set_interval", "set_data_interval"):
-            interval = int(payload.get("interval", 0))
+            interval = self.coerce_number(payload.get("interval"), 0.0)
             if 5 <= interval <= 3600:
                 self.sampling_interval = interval
                 log.info(f"[{self.node_id}] ✓ samplingInterval → {interval}s")
@@ -119,7 +119,7 @@ class GenericSensor(MqttNode):
                 log.warning(f"[{self.node_id}] ✗ interval 越界（5-3600）: {interval}")
 
         elif command == "set_status_interval":
-            interval = int(payload.get("interval", 0))
+            interval = self.coerce_number(payload.get("interval"), 0.0)
             if 30 <= interval <= 600:
                 self.status_report_interval = interval
                 log.info(f"[{self.node_id}] ✓ statusReportInterval → {interval}s")
@@ -167,9 +167,9 @@ def main():
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
-    parser.add_argument("--sampling-interval", type=int,
+    parser.add_argument("--sampling-interval", type=float,
                         default=GenericSensor.DEFAULT_SAMPLING_INTERVAL)
-    parser.add_argument("--status-report-interval", type=int,
+    parser.add_argument("--status-report-interval", type=float,
                         default=GenericSensor.DEFAULT_STATUS_REPORT_INTERVAL)
     parser.add_argument("--field", action="append", default=None,
                         help="字段定义 name:waveform_type:k=v,k=v（可重复）；"

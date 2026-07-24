@@ -1,7 +1,7 @@
 <template>
   <main class="app-main">
     <router-view v-slot="{ Component }">
-      <transition name="fade-transform" mode="out-in">
+      <transition name="fade-transform" appear>
         <component :is="Component" />
       </transition>
     </router-view>
@@ -13,18 +13,23 @@
 
 <style scoped>
 .app-main {
+  --app-main-padding-inline: clamp(22px, 2.25vw, 38px);
+  --app-main-padding-top: clamp(22px, 2.25vw, 38px);
+  --app-main-padding-bottom: max(clamp(28px, 3vw, 48px), env(safe-area-inset-bottom));
+  position: relative;
   width: 100%;
   max-width: var(--iot-content-max-width);
   min-height: calc(100vh - var(--iot-header-height));
   margin: 0 auto;
-  padding: clamp(22px, 2.25vw, 38px);
-  padding-bottom: max(clamp(28px, 3vw, 48px), env(safe-area-inset-bottom));
+  padding: var(--app-main-padding-top) var(--app-main-padding-inline) var(--app-main-padding-bottom);
   transition: padding var(--iot-transition-base);
 }
 
 @media (max-width: 767px) {
   .app-main {
-    padding: 20px 14px max(28px, env(safe-area-inset-bottom));
+    --app-main-padding-inline: 14px;
+    --app-main-padding-top: 20px;
+    --app-main-padding-bottom: max(28px, env(safe-area-inset-bottom));
   }
 }
 
