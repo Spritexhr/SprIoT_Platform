@@ -2,6 +2,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, Mock, patch
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -147,13 +148,11 @@ class DashboardStatsQueryPerformanceTests(APITestCase):
 
 class HealthCheckSecurityTests(APITestCase):
     def test_public_health_check_does_not_expose_internal_exception_details(self):
-        cursor_context = MagicMock()
-        cursor_context.__enter__.return_value.execute.side_effect = RuntimeError(
-            "mysql://secret-user:secret-pass@internal-db"
-        )
         with patch(
-            "config.api_views.connection.cursor",
-            return_value=cursor_context,
+            "config.api_views._check_database_connection",
+            side_effect=RuntimeError(
+                "mysql://secret-user:secret-pass@internal-db"
+            ),
         ), patch(
             "services.mqtt_command_bus.get_mqtt_command_bus",
             side_effect=RuntimeError("redis://internal-redis:6379"),
@@ -179,10 +178,20 @@ class HealthCheckSecurityTests(APITestCase):
             "command_worker_alive": "1",
         }
 
-        with patch(
-            "config.api_views.connection.cursor",
-            return_value=cursor_context,
-        ), patch(
+        if connection.vendor == "mysql":
+            probe = MagicMock()
+            probe.cursor.return_value = cursor
+            database_probe = patch(
+                "config.api_views.connection.Database.connect",
+                return_value=probe,
+            )
+        else:
+            database_probe = patch(
+                "config.api_views.connection.cursor",
+                return_value=cursor_context,
+            )
+
+        with database_probe, patch(
             "services.mqtt_command_bus.get_mqtt_command_bus",
             return_value=bus,
         ):
@@ -190,3 +199,6 @@ class HealthCheckSecurityTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         cursor.execute.assert_called_once_with("SELECT 1")
+        if connection.vendor == "mysql":
+            cursor.close.assert_called_once_with()
+            probe.close.assert_called_once_with()

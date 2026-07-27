@@ -16,7 +16,7 @@ from unittest import expectedFailure
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -120,7 +120,9 @@ class JwtRevocationSecurityTests(APITestCase):
         self.assertEqual(refreshed.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
-class WebSocketJwtSecurityTests(TestCase):
+class WebSocketJwtSecurityTests(TransactionTestCase):
+    """鉴权查询会进入 database_sync_to_async，测试数据必须真实提交。"""
+
     def setUp(self):
         self.user = get_user_model().objects.create_user(
             username="websocket-auth-user",

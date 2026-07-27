@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -19,7 +19,7 @@ from .models import (
 )
 
 
-class ProjectMembershipRealtimeTests(TestCase):
+class ProjectMembershipRealtimeTests(TransactionTestCase):
     """已有 WebSocket 连接应在项目成员变化后立即更新过滤集合和快照。"""
 
     def setUp(self):
@@ -104,10 +104,9 @@ class ProjectMembershipRealtimeTests(TestCase):
             device_type=self.device_type,
         )
 
-        with (
-            patch("projects.signals.publish_project_membership_changed") as publish,
-            self.captureOnCommitCallbacks(execute=True),
-        ):
+        with patch(
+            "projects.signals.publish_project_membership_changed"
+        ) as publish:
             ProjectDeviceMember.objects.create(
                 project=self.project,
                 section=self.section,
@@ -123,10 +122,9 @@ class ProjectMembershipRealtimeTests(TestCase):
             sensor_type=self.sensor_type,
         )
 
-        with (
-            patch("projects.signals.publish_project_membership_changed") as publish,
-            self.captureOnCommitCallbacks(execute=True),
-        ):
+        with patch(
+            "projects.signals.publish_project_membership_changed"
+        ) as publish:
             ProjectSensorMember.objects.create(
                 project=self.project,
                 section=self.section,
@@ -146,10 +144,9 @@ class ProjectMembershipRealtimeTests(TestCase):
             name="新分区",
         )
 
-        with (
-            patch("projects.signals.publish_project_membership_changed") as publish,
-            self.captureOnCommitCallbacks(execute=True),
-        ):
+        with patch(
+            "projects.signals.publish_project_membership_changed"
+        ) as publish:
             self.first_member.project = target_project
             self.first_member.section = target_section
             self.first_member.save()
