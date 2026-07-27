@@ -12,12 +12,15 @@ client_id 用 sim-webui-<pid>，避免与节点的 WemosD1-<id> 命名空间冲�
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
 from typing import Callable, Dict, Optional
 
 import paho.mqtt.client as mqtt
+
+from common.mqtt_compat import create_client, reason_code_value
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ class MqttMonitor:
             self._disconnect_locked()
             self._broker_cfg = broker
 
-            client = mqtt.Client(client_id=f"sim-webui-{os.getpid()}")
+            client = create_client(client_id=f"sim-webui-{os.getpid()}")
             if broker.get("username"):
                 client.username_pw_set(broker["username"], broker.get("password", ""))
             client.on_connect = self._on_connect
@@ -81,7 +84,8 @@ class MqttMonitor:
 
     # ============ MQTT 回调（paho 线程） ============
 
-    def _on_connect(self, client, userdata, flags, rc):
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        rc = reason_code_value(reason_code)
         if rc == 0:
             self.connected = True
             client.subscribe([
@@ -94,7 +98,17 @@ class MqttMonitor:
         else:
             log.error(f"monitor ✗ 连接失败 rc={rc}")
 
-    def _on_disconnect(self, client, userdata, rc):
+    def _on_disconnect(
+        self,
+        client,
+        userdata,
+        disconnect_flags_or_rc,
+        reason_code=None,
+        properties=None,
+    ):
+        rc = reason_code_value(
+            disconnect_flags_or_rc if reason_code is None else reason_code
+        )
         self.connected = False
         self._emit({"type": "monitor_state", "connected": False})
         if rc != 0:
@@ -126,7 +140,12 @@ class MqttMonitor:
             entry["last_status"] = status
             entry["last_event"] = payload.get("event")
             interval = status.get("statusReportInterval")
-            if isinstance(interval, (int, float)) and interval > 0:
+            if (
+                isinstance(interval, (int, float))
+                and not isinstance(interval, bool)
+                and math.isfinite(interval)
+                and interval > 0
+            ):
                 entry["status_interval"] = interval
             self._emit({"type": "node_status", "node": self._node_out(key)})
         elif kind == "data":

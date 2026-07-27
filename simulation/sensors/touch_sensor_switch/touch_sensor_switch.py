@@ -33,7 +33,7 @@ class TouchSensorSwitch(MqttNode):
     DEFAULT_INITIAL_STATE = False
 
     PARAMS_SCHEMA = [
-        ParamSpec("status_report_interval", "int", label="心跳间隔(秒)",
+        ParamSpec("status_report_interval", "float", label="心跳间隔(秒)",
                   default=DEFAULT_STATUS_REPORT_INTERVAL, min=5, max=86400),
         ParamSpec("flip_period_s", "float", label="翻转周期(秒)",
                   default=DEFAULT_FLIP_PERIOD_S, min=0.5,
@@ -46,7 +46,7 @@ class TouchSensorSwitch(MqttNode):
         {"command": "enable", "label": "启用"},
         {"command": "disable", "label": "禁用"},
         {"command": "set_status_interval", "label": "设置心跳间隔",
-         "args": [{"name": "interval", "type": "int", "min": 30, "max": 600}]},
+         "args": [{"name": "interval", "type": "float", "min": 30, "max": 600}]},
     ]
 
     def __init__(
@@ -56,7 +56,7 @@ class TouchSensorSwitch(MqttNode):
         port: int = 1883,
         username: str = "",
         password: str = "",
-        status_report_interval: int = DEFAULT_STATUS_REPORT_INTERVAL,
+        status_report_interval: float = DEFAULT_STATUS_REPORT_INTERVAL,
         flip_period_s: float = DEFAULT_FLIP_PERIOD_S,
         initial_state: bool = DEFAULT_INITIAL_STATE,
     ):
@@ -84,7 +84,7 @@ class TouchSensorSwitch(MqttNode):
 
     def handle_command(self, command: str, payload: dict, check_code: Optional[str]) -> None:
         if command == "set_status_interval":
-            interval = int(payload.get("interval", 0))
+            interval = self.coerce_number(payload.get("interval"), 0.0)
             if 30 <= interval <= 600:
                 self.status_report_interval = interval
                 log.info(f"[{self.node_id}] ✓ statusReportInterval → {interval}s")
@@ -135,7 +135,7 @@ def main():
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
-    parser.add_argument("--status-report-interval", type=int,
+    parser.add_argument("--status-report-interval", type=float,
                         default=TouchSensorSwitch.DEFAULT_STATUS_REPORT_INTERVAL)
     parser.add_argument("--flip-period-s", type=float,
                         default=TouchSensorSwitch.DEFAULT_FLIP_PERIOD_S)

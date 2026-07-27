@@ -4,21 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IoT 虚拟节点模拟器</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23e5663d'/%3E%3Cpath d='M18 32h28M32 18v28' stroke='white' stroke-width='7' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css?v=20260724-apple-float-6">
 </head>
 <body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <div class="ambient-shape ambient-shape-one" aria-hidden="true"></div>
+  <div class="ambient-shape ambient-shape-two" aria-hidden="true"></div>
   <div id="app">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-dot"></span>
-        IoT 虚拟节点模拟器
+        <span class="brand-mark" aria-hidden="true">
+          <span class="brand-dot"></span>
+        </span>
+        <span class="brand-copy">
+          <strong>IoT Simulator</strong>
+          <small>虚拟节点控制台</small>
+        </span>
       </div>
-      <nav class="tabs">
+      <nav class="tabs" aria-label="模拟器功能">
         <button v-for="t in tabs" :key="t.key"
                 :class="['tab', { active: tab === t.key }]"
-                @click="tab = t.key">{{ t.label }}</button>
+                :aria-current="tab === t.key ? 'page' : null"
+                @click="switchTab(t.key)">{{ t.label }}</button>
       </nav>
-      <div class="topbar-right">
+      <div class="topbar-right" aria-label="连接状态" aria-live="polite">
         <span :class="['conn-badge', wsStatus]">页面 {{ wsStatusText }}</span>
         <span :class="['conn-badge', monitorConnected ? 'open' : 'closed']">
           MQTT {{ monitorConnected ? '已连接' : '未连接' }}
@@ -26,27 +36,34 @@
       </div>
     </header>
 
-    <main class="page">
-      <div class="page-enter" :key="tab">
-        <manage-page v-if="tab === 'manage'"
-                     :meta="meta" :waveforms="waveformSchemas"
-                     @start-run="startRun" @refresh-live="refreshLive"></manage-page>
-        <monitor-page v-if="tab === 'monitor'"
-                      :live="live" :runs="runs" :meta="meta"
-                      :module-map="moduleMap"
-                      @stop-run="stopRun" @send-command="sendCommand"
-                      @refresh="refreshAll"></monitor-page>
-        <logs-page v-if="tab === 'logs'" :runs="runs" :log-events="logEvents"></logs-page>
-        <settings-page v-if="tab === 'settings'" @brokers-changed="refreshAll"></settings-page>
+    <main class="page" id="main-content">
+      <section :class="['page-heading', { 'is-switching': isSwitchingView }]" aria-labelledby="page-title">
+        <span class="page-kicker">Simulation Workspace</span>
+        <h1 id="page-title">{{ (currentTab && currentTab.label) || '节点管理' }}</h1>
+        <p>{{ (currentTab && currentTab.description) || '编排分组、节点参数与波形，然后启动仿真。' }}</p>
+      </section>
+      <div :class="['page-enter', { 'is-switching': isSwitchingView }]">
+        <keep-alive>
+          <manage-page v-if="tab === 'manage'"
+                       :meta="meta" :waveforms="waveformSchemas"
+                       @start-run="startRun" @refresh-live="refreshLive"></manage-page>
+          <monitor-page v-else-if="tab === 'monitor'"
+                        :live="live" :runs="runs" :meta="meta"
+                        :module-map="moduleMap"
+                        @stop-run="stopRun" @send-command="sendCommand"
+                        @refresh="refreshAll"></monitor-page>
+          <logs-page v-else-if="tab === 'logs'" :runs="runs" :log-events="logEvents"></logs-page>
+          <settings-page v-else @brokers-changed="refreshAll"></settings-page>
+        </keep-alive>
       </div>
     </main>
 
-    <div class="toast-wrap">
-      <div v-for="t in toasts" :key="t.id" :class="['toast', t.kind]">{{ t.text }}</div>
+    <div class="toast-wrap" aria-live="polite" aria-atomic="true">
+      <div v-for="t in toasts" :key="t.id" :class="['toast', t.kind]" role="status">{{ t.text }}</div>
     </div>
   </div>
 
   <script src="/static/vendor/vue.global.prod.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260724-apple-float-6"></script>
 </body>
 </html>

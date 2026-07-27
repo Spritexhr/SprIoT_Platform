@@ -1,7 +1,8 @@
 """自由 Python 自动化的独立进程执行边界。
 
-父进程只传递规则主键和可序列化运行配置；子进程使用 ``spawn`` 重新初始化
-Django、关闭旧连接、从数据库重取规则，再调用 engine.execute_rule()。
+父进程只传递规则主键和可序列化运行配置；支持的平台默认通过预加载 Django 的
+``forkserver`` 为每一拍派生全新子进程，不支持时回退 ``spawn``。子进程关闭
+继承连接、从数据库重取规则，再调用 engine.execute_rule()。
 执行结果通过有界 JSON 协议返回，任何超时都会 terminate / kill / join 回收。
 
 独立进程提供可终止性，不是 OS 沙箱：脚本仍具有服务容器的文件、网络和数据库权限。
@@ -45,6 +46,8 @@ _KILL_GRACE_SECONDS = 1.0
 _LOCK_REDIS_TIMEOUT_SECONDS = 1.0
 _LOCK_SAFETY_MARGIN_SECONDS = 15.0
 _DEFAULT_LOCK_PREFIX = "spr:iot:automation:execution"
+_DEFAULT_START_METHOD = "auto"
+_FORKSERVER_PRELOAD_MODULE = "automation.forkserver_preload"
 _RELEASE_LOCK_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -322,7 +325,7 @@ def _child_process_main(
     process_group_flag,
     result_connection,
 ) -> None:
-    """spawn 子进程入口；必须保持模块顶层且参数均可 pickle。"""
+    """每拍全新子进程入口；必须保持模块顶层且参数均可 pickle。"""
     os.environ["AUTOMATION_EXECUTOR_CHILD"] = "1"
     os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
     # 避免 AppConfig 根据父进程的 runserver / mqtt_runner argv 启动常驻任务。
@@ -369,6 +372,9 @@ def _child_process_main(
 
         import django
 
+        # forkserver 已完成 apps.populate()，这里的重复调用不会重新加载应用；但
+        # django.setup() 仍会为每拍重建本进程的 logging handlers，避免长期继承
+        # forkserver 的文件描述符与 rolloverAt。spawn 路径则照常完成完整初始化。
         django.setup()
 
         from django.conf import settings as django_settings
@@ -377,8 +383,9 @@ def _child_process_main(
         connections = django_connections
         connections.close_all()
 
-        # spawn 会重新加载默认 settings；显式同步父进程实际使用的数据库（尤其是
-        # Django test DB / 多数据库别名），同时杜绝复用 setup 阶段可能建立的连接。
+        # spawn 会重新加载默认 settings，forkserver 会继承预加载 settings；
+        # 两种路径都显式同步父进程实际使用的数据库（尤其是 Django test DB /
+        # 多数据库别名），同时杜绝复用 setup / preload 阶段可能建立的连接。
         configured_database = copy.deepcopy(database_settings)
         configured_database["CONN_MAX_AGE"] = 0
         configured_database["CONN_HEALTH_CHECKS"] = False
@@ -555,6 +562,37 @@ def _database_settings_for_child(database_alias: str) -> dict:
         ) from exc
 
 
+def _get_execution_context(configured_method: str):
+    """选择隔离进程上下文；forkserver 不可用时安全回退到 spawn。
+
+    ``spawn`` 是明确的运维回滚开关。``auto`` / ``forkserver`` 在当前解释器不
+    支持 forkserver 时才回退，不能在子进程启动后自动重跑，以免脚本已产生部分
+    设备副作用时发生重复执行。
+    """
+    normalized_method = str(configured_method or _DEFAULT_START_METHOD).strip().lower()
+    if normalized_method not in {"auto", "forkserver", "spawn"}:
+        raise AutomationExecutorCrashed(
+            "AUTOMATION_EXECUTOR_START_METHOD 必须是 auto、forkserver 或 spawn"
+        )
+
+    available_methods = set(multiprocessing.get_all_start_methods())
+    use_forkserver = (
+        normalized_method in {"auto", "forkserver"}
+        and "forkserver" in available_methods
+    )
+    if use_forkserver:
+        # 必须在首次 forkserver Process.start() 前设置。服务进程内重复设置是
+        # 幂等的；若 forkserver 因父进程退出而重启，也会继续应用该预加载列表。
+        multiprocessing.set_forkserver_preload([_FORKSERVER_PRELOAD_MODULE])
+        return multiprocessing.get_context("forkserver")
+
+    if normalized_method == "forkserver":
+        logger.warning(
+            "当前平台不支持 forkserver，自动化执行器已回退到 spawn"
+        )
+    return multiprocessing.get_context("spawn")
+
+
 def _get_execution_lock_client():
     """构造短超时 Redis 客户端；连接失败由 acquire 转成 fail-closed 异常。"""
     from django.conf import settings
@@ -653,10 +691,17 @@ def _execute_rule_process_under_lease(
         for item in getattr(settings, "AUTOMATION_ALLOWED_IMPORTS", ())
         if str(item)
     )
+    start_method = getattr(
+        settings,
+        "AUTOMATION_EXECUTOR_START_METHOD",
+        _DEFAULT_START_METHOD,
+    )
 
     capture_directory, output_capture_path, log_capture_path = _create_capture_sidecars()
     try:
-        context = multiprocessing.get_context("spawn")
+        # forkserver 预加载进程通过环境读取与父进程相同的 Django settings。
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", str(settings_module))
+        context = _get_execution_context(start_method)
         # 无锁单写单读标志；不能用 Event/Condition，避免子进程被 SIGKILL 时
         # 恰好持有同步锁，导致父进程 finally 永久阻塞。
         process_group_flag = context.RawValue("b", 0)
@@ -813,7 +858,7 @@ def _execute_rule_process_under_lease(
 
 
 def _execute_rule_process(rule_id: int, *, using: str) -> AutomationExecutionResult:
-    """统一入口：策略校验 → Redis 单飞 → spawn 硬超时 → owner 安全解锁。"""
+    """统一入口：策略校验 → Redis 单飞 → 独立进程硬超时 → owner 安全解锁。"""
     ensure_script_execution_enabled()
     timeout = get_script_execution_timeout()
     normalized_rule_id = int(rule_id)

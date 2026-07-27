@@ -12,7 +12,7 @@
 
     <section class="ops-overview iot-mb-lg">
       <div class="ops-overview__main">
-        <span class="ops-eyebrow">运行总览</span>
+        <span class="ops-eyebrow">系统状态</span>
         <div class="ops-overview__headline">
           <strong>{{ onlineRate }}%</strong>
           <span>资源在线率</span>
@@ -49,7 +49,7 @@
       <div class="health-panel iot-card">
         <div class="panel-heading">
           <div>
-            <span class="panel-kicker">Health Matrix</span>
+            <span class="panel-kicker">运行状态</span>
             <h2>资源健康</h2>
           </div>
           <el-button text type="primary" size="small" @click="fetchStats">刷新</el-button>
@@ -60,7 +60,7 @@
               <span>传感器</span>
               <strong>{{ sensorRate }}%</strong>
             </div>
-            <div class="health-meter"><span :style="{ width: `${sensorRate}%` }"></span></div>
+            <div class="health-meter" role="progressbar" aria-label="传感器在线率" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="sensorRate"><span :style="{ width: `${sensorRate}%` }"></span></div>
             <p>{{ stats.sensor_online }} 在线 · {{ offlineSensors }} 离线</p>
           </button>
           <button type="button" class="health-tile" @click="router.push('/devices')">
@@ -68,7 +68,7 @@
               <span>设备</span>
               <strong>{{ deviceRate }}%</strong>
             </div>
-            <div class="health-meter"><span :style="{ width: `${deviceRate}%` }"></span></div>
+            <div class="health-meter" role="progressbar" aria-label="设备在线率" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="deviceRate"><span :style="{ width: `${deviceRate}%` }"></span></div>
             <p>{{ stats.device_online }} 在线 · {{ offlineDevices }} 离线</p>
           </button>
           <div class="health-tile health-tile--quiet">
@@ -97,7 +97,7 @@
       <div class="activity-panel iot-card">
         <div class="panel-heading">
           <div>
-            <span class="panel-kicker">Live Feed</span>
+            <span class="panel-kicker">实时动态</span>
             <h2>最近活动</h2>
           </div>
         </div>
@@ -125,7 +125,7 @@
       <div class="compact-panel iot-card">
         <div class="panel-heading">
           <div>
-            <span class="panel-kicker">Sensors</span>
+            <span class="panel-kicker">传感器</span>
             <h2>{{ ls.t('dashboard.recentSensors') }}</h2>
           </div>
           <el-button text size="small" type="primary" @click="router.push('/sensors')">
@@ -155,7 +155,7 @@
       <div class="compact-panel iot-card">
         <div class="panel-heading">
           <div>
-            <span class="panel-kicker">Devices</span>
+            <span class="panel-kicker">设备</span>
             <h2>{{ ls.t('dashboard.deviceStatus') }}</h2>
           </div>
           <el-button text size="small" type="primary" @click="router.push('/devices')">
@@ -185,7 +185,7 @@
       <div class="compact-panel iot-card">
         <div class="panel-heading">
           <div>
-            <span class="panel-kicker">Automation</span>
+            <span class="panel-kicker">自动化</span>
             <h2>{{ ls.t('dashboard.automationRules') }}</h2>
           </div>
           <el-button text size="small" type="primary" @click="router.push('/automation')">
@@ -814,6 +814,292 @@ button.health-tile:hover {
   .activity-row__value {
     grid-column: 2;
     text-align: left;
+  }
+}
+
+/* Apple Design refinement：大层级负责理解，小反馈保持即时。 */
+.ops-overview {
+  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.58fr);
+  gap: 18px;
+}
+
+.ops-overview__main,
+.ops-status-strip,
+.health-panel,
+.activity-panel,
+.compact-panel {
+  border-color: var(--iot-border-color-light);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-sm);
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(165%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(165%);
+}
+
+.ops-overview__main {
+  position: relative;
+  min-height: 190px;
+  overflow: hidden;
+  padding: 28px 30px;
+  border-radius: var(--iot-radius-xl);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--iot-bg-card) 86%, var(--iot-color-primary-bg)), var(--iot-bg-card)),
+    var(--iot-bg-card);
+}
+
+.ops-overview__main::after {
+  position: absolute;
+  top: -75px;
+  right: -50px;
+  width: 210px;
+  height: 210px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--iot-color-primary-soft), transparent 68%);
+  pointer-events: none;
+  content: '';
+}
+
+.ops-eyebrow,
+.panel-kicker {
+  color: var(--iot-color-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.075em;
+}
+
+.ops-eyebrow {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--iot-color-primary) 18%, transparent);
+  border-radius: var(--iot-radius-pill);
+  background: var(--iot-color-primary-bg);
+}
+
+.ops-overview__headline {
+  position: relative;
+  z-index: 1;
+  gap: 13px;
+  margin-top: 20px;
+}
+
+.ops-overview__headline strong {
+  font-family: var(--iot-font-display);
+  font-size: clamp(48px, 5vw, 66px);
+  font-weight: 660;
+  letter-spacing: -0.055em;
+}
+
+.ops-overview__headline span {
+  font-size: 15px;
+  font-weight: 580;
+}
+
+.ops-overview__meta {
+  position: relative;
+  z-index: 1;
+  margin-top: 15px;
+  font-size: var(--iot-font-size-sm);
+}
+
+.ops-status-strip {
+  gap: 9px;
+  padding: 10px;
+  border-radius: var(--iot-radius-xl);
+  background: var(--iot-material-regular);
+}
+
+.ops-status-item {
+  min-height: 168px;
+  padding: 21px 16px;
+  border-color: transparent;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--iot-bg-card-solid) 70%, transparent);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+}
+
+button.ops-status-item {
+  transition: transform var(--iot-transition-instant), border-color var(--iot-transition-fast), background-color var(--iot-transition-fast), box-shadow var(--iot-transition-fast);
+}
+
+button.ops-status-item:hover {
+  border-color: color-mix(in srgb, var(--iot-color-primary) 20%, var(--iot-border-color-light));
+  background: var(--iot-bg-card-hover);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-sm);
+  transform: translateY(-1px);
+}
+
+button.ops-status-item:active {
+  transform: scale(0.975);
+  transition-duration: 100ms;
+}
+
+.ops-status-item__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 5px 12px rgba(33, 30, 27, 0.1);
+}
+
+.ops-status-item__icon.is-data { background: var(--iot-text-secondary); }
+
+.ops-status-item strong {
+  font-family: var(--iot-font-display);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.dashboard-layout,
+.dashboard-lists {
+  gap: 18px;
+}
+
+.health-panel,
+.activity-panel,
+.compact-panel {
+  padding: 22px;
+  border-radius: var(--iot-radius-xl);
+  background: var(--iot-bg-card);
+}
+
+.panel-heading {
+  margin-bottom: 18px;
+}
+
+.panel-heading h2 {
+  margin-top: 5px;
+  font-family: var(--iot-font-display);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.health-grid { gap: 10px; }
+
+.health-tile {
+  min-height: 138px;
+  padding: 18px;
+  border-color: var(--iot-border-color-lighter);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--iot-bg-card-solid) 64%, transparent);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+}
+
+button.health-tile {
+  transition: transform var(--iot-transition-instant), border-color var(--iot-transition-fast), background-color var(--iot-transition-fast);
+}
+
+button.health-tile:hover {
+  border-color: color-mix(in srgb, var(--iot-color-primary) 24%, var(--iot-border-color-light));
+  background: var(--iot-bg-card-hover);
+  transform: translateY(-1px);
+}
+
+button.health-tile:active {
+  transform: scale(0.985);
+  transition-duration: 100ms;
+}
+
+.health-tile__top strong {
+  font-family: var(--iot-font-display);
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.health-meter {
+  height: 6px;
+  margin: 22px 0 15px;
+  background: color-mix(in srgb, var(--iot-text-secondary) 10%, transparent);
+}
+
+.health-meter span {
+  background: linear-gradient(90deg, var(--iot-color-primary-dark), var(--iot-color-primary-light));
+  transition: width var(--iot-transition-slow);
+}
+
+.activity-list,
+.compact-list { gap: 2px; }
+
+.activity-row,
+.compact-row {
+  border: 0;
+  border-radius: 11px;
+  box-shadow: inset 0 -1px 0 var(--iot-separator);
+  transition: background-color var(--iot-transition-fast), transform var(--iot-transition-instant);
+}
+
+.activity-row:last-child,
+.compact-row:last-child { box-shadow: none; }
+
+.activity-row:hover,
+.compact-row:hover {
+  border-color: transparent;
+  background: var(--iot-material-thin);
+}
+
+.activity-row:active,
+.compact-row:active {
+  transform: scale(0.992);
+  transition-duration: 100ms;
+}
+
+.activity-row { min-height: 52px; }
+.compact-row { min-height: 46px; }
+
+.activity-row__main strong,
+.compact-row__name { font-weight: 600; }
+
+.script-id-tag {
+  padding: 3px 7px;
+  border-radius: var(--iot-radius-sm);
+  background: var(--iot-material-thin);
+}
+
+@media (max-width: 1180px) {
+  .ops-overview,
+  .dashboard-layout,
+  .dashboard-lists { grid-template-columns: 1fr; }
+
+  .ops-status-item { min-height: 120px; }
+}
+
+@media (max-width: 768px) {
+  .iot-page-subtitle { display: block; }
+  .ops-overview__main { min-height: 174px; padding: 24px; }
+  .ops-overview__headline strong { font-size: 48px; }
+  .health-panel,
+  .activity-panel,
+  .compact-panel { padding: 18px; }
+}
+
+@media (max-width: 520px) {
+  .ops-overview { gap: 12px; }
+  .ops-status-strip { grid-template-columns: 1fr 1fr; }
+  .ops-status-item { min-height: 106px; padding: 15px 12px; }
+  .ops-status-item:last-child strong { font-size: 15px; }
+  .health-grid { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.ops-status-item:hover,
+  button.ops-status-item:active,
+  button.health-tile:hover,
+  button.health-tile:active,
+  .activity-row:active,
+  .compact-row:active { transform: none; }
+
+  .health-meter span { transition: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .ops-overview__main,
+  .ops-status-strip,
+  .health-panel,
+  .activity-panel,
+  .compact-panel {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 </style>

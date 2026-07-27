@@ -2,6 +2,7 @@ import copy
 import multiprocessing
 import os
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -20,6 +21,7 @@ from devices.models import Device, DeviceType
 from projects.models import Project, ProjectDeviceMember, ProjectSection, ProjectSensorMember
 from sensors.models import Sensor, SensorData, SensorType
 
+from . import scheduler as automation_scheduler
 from .head_files.devices import build_devices
 from .admin import AutomationRuleAdmin
 from .controllers import run_control_scheme_locked
@@ -30,11 +32,13 @@ from .execution_policy import (
     SCRIPT_EXECUTION_DISABLED_MESSAGE,
 )
 from .executor import (
+    AutomationExecutorCrashed,
     AutomationExecutionLockUnavailable,
     AutomationExecutionResult,
     AutomationRuleBusy,
     AutomationScriptExecutionTimeout,
     AutomationScriptRemoteError,
+    _get_execution_context,
     execute_rule_with_timeout_details,
 )
 from .models import AutomationRule, ControlScheme
@@ -382,6 +386,26 @@ class ProjectAutomationRuleApiTests(APITestCase):
         self.assertFalse(rule.is_launched)
         self.assertEqual(rule.process_status, "error_stopped")
         self.assertIn("boom", rule.error_message)
+
+    def test_scheduler_busy_collision_only_skips_the_current_tick(self):
+        rule = self.create_rule(device_list=[], script="def loop(): return True")
+        rule.is_launched = True
+        rule.process_status = "running"
+        rule.last_run_time = None
+        rule.save(update_fields=["is_launched", "process_status", "last_run_time"])
+        due_at = timezone.now()
+
+        with patch(
+            "automation.scheduler.execute_rule_with_timeout",
+            side_effect=AutomationRuleBusy(rule.pk),
+        ):
+            _process_automation_rules(due_at)
+
+        rule.refresh_from_db()
+        self.assertTrue(rule.is_launched)
+        self.assertEqual(rule.process_status, "running")
+        self.assertEqual(rule.error_message, "")
+        self.assertEqual(rule.last_run_time, due_at)
 
     def test_staff_cannot_mutate_or_execute_project_rule(self):
         rule = self.create_rule(device_list=[])
@@ -841,8 +865,231 @@ class ProjectAutomationRuleApiTests(APITestCase):
         self.assertFalse(AutomationRule.objects.filter(pk=rule.id).exists())
 
 
+class AutomationExecutorContextTests(unittest.TestCase):
+    def test_auto_prefers_preloaded_forkserver(self):
+        context = object()
+        with (
+            patch(
+                "automation.executor.multiprocessing.get_all_start_methods",
+                return_value=["spawn", "forkserver"],
+            ),
+            patch(
+                "automation.executor.multiprocessing.set_forkserver_preload"
+            ) as set_preload,
+            patch(
+                "automation.executor.multiprocessing.get_context",
+                return_value=context,
+            ) as get_context,
+        ):
+            self.assertIs(_get_execution_context("auto"), context)
+
+        set_preload.assert_called_once_with(["automation.forkserver_preload"])
+        get_context.assert_called_once_with("forkserver")
+
+    def test_auto_falls_back_to_spawn_when_forkserver_is_unavailable(self):
+        context = object()
+        with (
+            patch(
+                "automation.executor.multiprocessing.get_all_start_methods",
+                return_value=["spawn"],
+            ),
+            patch(
+                "automation.executor.multiprocessing.set_forkserver_preload"
+            ) as set_preload,
+            patch(
+                "automation.executor.multiprocessing.get_context",
+                return_value=context,
+            ) as get_context,
+        ):
+            self.assertIs(_get_execution_context("auto"), context)
+
+        set_preload.assert_not_called()
+        get_context.assert_called_once_with("spawn")
+
+    def test_explicit_spawn_is_an_immediate_rollback(self):
+        context = object()
+        with (
+            patch(
+                "automation.executor.multiprocessing.get_all_start_methods",
+                return_value=["spawn", "forkserver"],
+            ),
+            patch(
+                "automation.executor.multiprocessing.set_forkserver_preload"
+            ) as set_preload,
+            patch(
+                "automation.executor.multiprocessing.get_context",
+                return_value=context,
+            ) as get_context,
+        ):
+            self.assertIs(_get_execution_context("spawn"), context)
+
+        set_preload.assert_not_called()
+        get_context.assert_called_once_with("spawn")
+
+    def test_invalid_start_method_fails_before_starting_a_process(self):
+        with (
+            patch(
+                "automation.executor.multiprocessing.get_all_start_methods"
+            ) as get_methods,
+            self.assertRaises(AutomationExecutorCrashed),
+        ):
+            _get_execution_context("fork")
+        get_methods.assert_not_called()
+
+
+class AutomationSchedulerLoopTests(unittest.TestCase):
+    def setUp(self):
+        self._scheduler_state = (
+            automation_scheduler._scheduler_thread,
+            automation_scheduler._control_scheduler_thread,
+            automation_scheduler._stop_event,
+        )
+        automation_scheduler._scheduler_thread = None
+        automation_scheduler._control_scheduler_thread = None
+        automation_scheduler._stop_event = threading.Event()
+
+    def tearDown(self):
+        (
+            automation_scheduler._scheduler_thread,
+            automation_scheduler._control_scheduler_thread,
+            automation_scheduler._stop_event,
+        ) = self._scheduler_state
+
+    def test_start_is_idempotent_and_does_not_revive_a_stopping_generation(self):
+        created_threads = []
+
+        class FakeThread:
+            def __init__(self, *, target, args, name, daemon):
+                self.target = target
+                self.args = args
+                self.name = name
+                self.daemon = daemon
+                self.started = False
+                self.join_calls = []
+                created_threads.append(self)
+
+            def start(self):
+                self.started = True
+
+            def is_alive(self):
+                return self.started
+
+            def join(self, timeout=None):
+                self.join_calls.append(timeout)
+
+        with patch("automation.scheduler.threading.Thread", FakeThread):
+            automation_scheduler.start_scheduler()
+            generation_event = automation_scheduler._stop_event
+            automation_scheduler.start_scheduler()
+
+            self.assertEqual(len(created_threads), 2)
+            self.assertEqual(
+                {thread.name for thread in created_threads},
+                {"AutomationRuleScheduler", "ControlSchemeScheduler"},
+            )
+
+            automation_scheduler.stop_scheduler()
+            self.assertTrue(generation_event.is_set())
+            automation_scheduler.start_scheduler()
+
+        self.assertEqual(len(created_threads), 2)
+        self.assertIs(automation_scheduler._stop_event, generation_event)
+        self.assertTrue(automation_scheduler._stop_event.is_set())
+        self.assertEqual(
+            [thread.join_calls for thread in created_threads],
+            [[2], [2]],
+        )
+
+    def test_blocked_script_loop_does_not_block_control_loop(self):
+        stop_event = threading.Event()
+        script_entered = threading.Event()
+        release_script = threading.Event()
+        control_called = threading.Event()
+
+        def blocked_script_processor(_now):
+            script_entered.set()
+            release_script.wait(timeout=2)
+
+        def control_processor(_now):
+            control_called.set()
+            stop_event.set()
+
+        with (
+            patch(
+                "automation.scheduler._process_automation_rules",
+                side_effect=blocked_script_processor,
+            ),
+            patch(
+                "automation.scheduler._process_control_schemes",
+                side_effect=control_processor,
+            ),
+            patch("automation.scheduler.close_old_connections"),
+        ):
+            script_thread = threading.Thread(
+                target=automation_scheduler._run_scheduler,
+                args=(stop_event,),
+            )
+            control_thread = threading.Thread(
+                target=automation_scheduler._run_control_scheduler,
+                args=(stop_event,),
+            )
+            try:
+                script_thread.start()
+                self.assertTrue(script_entered.wait(timeout=1))
+                control_thread.start()
+                self.assertTrue(control_called.wait(timeout=1))
+            finally:
+                stop_event.set()
+                release_script.set()
+                script_thread.join(timeout=2)
+                control_thread.join(timeout=2)
+
+        self.assertFalse(script_thread.is_alive())
+        self.assertFalse(control_thread.is_alive())
+
+    def test_periodic_loop_compensates_work_time_without_hot_catchup(self):
+        class SingleIterationEvent:
+            def __init__(self):
+                self.stopped = False
+                self.wait_calls = []
+
+            def is_set(self):
+                return self.stopped
+
+            def wait(self, timeout):
+                self.wait_calls.append(timeout)
+                self.stopped = True
+                return True
+
+        for elapsed, expected_wait in ((0.25, 0.75), (2.5, 0.5)):
+            with self.subTest(elapsed=elapsed):
+                stop_event = SingleIterationEvent()
+                processor_calls = []
+                with (
+                    patch(
+                        "automation.scheduler.time.monotonic",
+                        side_effect=[100.0, 100.0 + elapsed, 100.0 + elapsed],
+                    ),
+                    patch("automation.scheduler.close_old_connections"),
+                ):
+                    automation_scheduler._run_periodic_loop(
+                        processor_calls.append,
+                        stop_event,
+                        "测试调度器",
+                    )
+
+                self.assertEqual(processor_calls, [None])
+                self.assertEqual(len(stop_event.wait_calls), 1)
+                self.assertAlmostEqual(
+                    stop_event.wait_calls[0],
+                    expected_wait,
+                    places=6,
+                )
+                self.assertGreater(stop_event.wait_calls[0], 0)
+
+
 class IsolatedAutomationExecutorTests(unittest.TestCase):
-    """使用真实文件 SQLite + spawn，避免依赖 fork 继承测试库或 mock。"""
+    """真实文件 SQLite 进程集成测试；常规沙箱回归固定走 spawn。"""
 
     def setUp(self):
         from django.conf import settings
@@ -921,9 +1168,16 @@ class IsolatedAutomationExecutorTests(unittest.TestCase):
         )
         connections[self.database_alias].close()
 
-    def _execute(self, *, timeout=10.0, allowed_imports=None):
+    def _execute(
+        self,
+        *,
+        timeout=10.0,
+        allowed_imports=None,
+        start_method="spawn",
+    ):
         lock_client = _InMemoryExecutionLockClient()
         overridden = {
+            "AUTOMATION_EXECUTOR_START_METHOD": start_method,
             "AUTOMATION_SCRIPT_EXECUTION_ENABLED": True,
             "AUTOMATION_SCRIPT_TIMEOUT_SECONDS": timeout,
         }
@@ -1000,6 +1254,33 @@ class IsolatedAutomationExecutorTests(unittest.TestCase):
         error.remote_message.encode("utf-8")
         error.remote_traceback.encode("utf-8")
         str(error).encode("utf-8")
+
+    @unittest.skipUnless(
+        os.environ.get("RUN_FORKSERVER_INTEGRATION_TESTS") == "1",
+        "仅在允许创建 forkserver Unix socket 的 Docker 集成环境运行",
+    )
+    def test_forkserver_preloads_django_and_each_tick_uses_a_fresh_process(self):
+        self._set_script(
+            "import os\n"
+            "def loop():\n"
+            "    print(f\"{os.getpid()}:{os.environ.get('AUTOMATION_FORKSERVER_PRELOADED', '')}\")\n"
+            "    return True"
+        )
+
+        first, _ = self._execute(
+            allowed_imports=["os"],
+            start_method="forkserver",
+        )
+        second, _ = self._execute(
+            allowed_imports=["os"],
+            start_method="forkserver",
+        )
+
+        first_pid, first_marker = first.output.strip().split(":", 1)
+        second_pid, second_marker = second.output.strip().split(":", 1)
+        self.assertNotEqual(first_pid, second_pid)
+        self.assertEqual(first_marker, "1")
+        self.assertEqual(second_marker, "1")
 
     def test_real_infinite_loop_is_terminated_on_time_without_residual_child(self):
         sentinel_path = os.path.join(self._temp_dir.name, "loop-started")

@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -104,6 +105,7 @@ class DataVizApiTests(APITestCase):
             response = self.client.get(reverse("data-viz-sources"))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(response.data), {"sensors", "devices"})
         self.assertEqual(len(response.data["sensors"]), 5)
         self.assertEqual(len(response.data["devices"]), 5)
         sensor = next(
@@ -142,7 +144,11 @@ class DataVizApiTests(APITestCase):
             [point["data"]["value"] for point in response.data["points"]],
             [2, 3],
         )
-        self.assertEqual(len(response.data["events"]), 2)
+        # 事件与数据点采用相同语义：超限时取最近 N 条，最后仍按时间升序输出。
+        self.assertEqual(
+            [event["event"] for event in response.data["events"]],
+            ["sensor-event-2", "sensor-event-3"],
+        )
 
     def test_device_series_has_fixed_queries_and_preserves_response_shape(self):
         with self.assertNumQueries(3):
@@ -243,3 +249,30 @@ class DataVizApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertIn("不存在", response.data["detail"])
+
+    @patch("plugins.data_viz.views.MAX_SOURCE_COUNT", 9)
+    def test_sources_reject_over_capacity_without_changing_success_contract(self):
+        response = self.client.get(reverse("data-viz-sources"))
+
+        self.assertEqual(response.status_code, status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        self.assertEqual(response.data["code"], "result_too_large")
+        self.assertIn("超过 9 个", response.data["detail"])
+
+    @patch("plugins.data_viz.views.MAX_SOURCES_RESPONSE_BYTES", 64)
+    def test_sources_reject_oversized_json_metadata(self):
+        response = self.client.get(reverse("data-viz-sources"))
+
+        self.assertEqual(response.status_code, status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        self.assertEqual(response.data["code"], "result_too_large")
+        self.assertIn("结果过大", response.data["detail"])
+
+    @patch("plugins.data_viz.views.MAX_SERIES_RESPONSE_BYTES", 128)
+    def test_series_rejects_oversized_json_payload(self):
+        response = self.client.get(
+            reverse("data-viz-series"),
+            self.series_params(),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        self.assertEqual(response.data["code"], "result_too_large")
+        self.assertIn("降低 limit", response.data["detail"])

@@ -4,7 +4,12 @@ from django.contrib import admin
 from django.urls import path, include
 from django.views.generic import RedirectView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .api_views import mqtt_status, dashboard_stats, health_check
+from .api_views import (
+    backend_health_check,
+    dashboard_stats,
+    health_check,
+    mqtt_status,
+)
 from .auth_views import register, user_profile, change_password
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,7 @@ urlpatterns = [
     path("api/", include("platform_settings.urls")),
     path("api/mqtt/status/", mqtt_status, name="mqtt-status"),
     path("api/dashboard/stats/", dashboard_stats, name="dashboard-stats"),
+    path("health/backend/", backend_health_check, name="backend-health-check"),
     path("health/", health_check, name="health-check"),
 ]
 

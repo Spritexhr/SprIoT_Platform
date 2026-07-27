@@ -32,7 +32,6 @@ simulation/
 │   ├── rotation_sensor/
 │   ├── touch_sensor_switch/
 │   ├── radial_counting_module/
-│   ├── temp_pressure_sensor/
 │   ├── flow_sensor/
 │   └── generic_sensor/       ★ 声明式通用传感器：字段全由配置定义，零代码
 ├── devices/                  设备节点（执行器，只上报 status，响应命令）
@@ -195,7 +194,6 @@ python simulation/devices/pump/pump.py \
 
 | Module | 默认 ID | 数据字段 / 状态字段 | 关键命令 |
 |--------|---------|---------|---------|
-| `temp_pressure_sensor` | TP-KPA-001 | `temperature`(°C), `pressure`(**kPa**) | enable/disable/set_data_interval/set_status_interval |
 | `pump` | pump_001 | 仅 status：`power_kw`, `target_power_kw`, `is_running` | **start/stop/set_power**/current_status/set_status_interval |
 | `flow_sensor` | FLOW-001 | `flow_rate`(L/min), `accumulated_volume`(L) | enable/disable/set_data_interval/set_status_interval/**reset_volume** |
 
@@ -203,7 +201,7 @@ python simulation/devices/pump/pump.py \
 
 | Module | 说明 | 关键命令 |
 |--------|------|---------|
-| `generic_sensor` | 数据字段完全由配置定义：每个字段配 `waveform` + `precision` + `unit`（仅展示）。协议 envelope 与"真"传感器一致，Django 侧无法区分 | enable/disable/set_interval/set_status_interval |
+| `generic_sensor` | 数据字段完全由配置定义：每个字段配 `waveform` + `precision` + `unit`（仅展示）。可在同一节点组合温度(°C)与压力(kPa)等多路数据；协议 envelope 与"真"传感器一致，Django 侧无法区分 | enable/disable/set_interval/set_status_interval |
 | `generic_device` | 状态字段完全由配置定义：`type`(bool/float) + `initial` + `min/max` 限幅 | **set_state {field, val}**；工业别名 **set_opening / set_duty / set_setpoint**；current_status/set_status_interval |
 
 ```yaml
@@ -326,6 +324,13 @@ cd simulation && uvicorn webui.server:app --port 8800
 | **运行监控** | 运行中的 run.py 子进程（pid/时长/停止）；节点实时在线状态、最新数据/状态（来自 MQTT 订阅）；按节点类型渲染**快捷命令按钮**（enable/disable/set_angle/start/stop…） |
 | **日志** | run 子进程日志实时 tail（WebSocket 推送）+ 关键词过滤 + 历史分页 |
 | **设置** | broker profile 管理 + 实连测试 + 一键导入旧 config.yaml |
+
+### 数值类型约定
+
+- 连续物理量和时间量使用浮点数：波形参数、设备功率/开度、舵机角度、采样间隔、心跳间隔都可填写小数，例如 `sampling_interval: 10.25`、`initial_angle: 90.5`。
+- 离散值仍严格使用整数：MQTT 端口、数据小数位数 `precision`、数据库主键等不会接受小数。
+- Web 表单、manifest 校验、单节点命令行参数和 MQTT 运行态命令使用同一套类型语义；小数不会在启动或命令处理时被截断。
+- `NaN`、正负无穷和布尔值不属于合法连续数值，会在校验或运行时转换阶段被拒绝。
 
 ### 架构要点
 

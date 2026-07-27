@@ -168,7 +168,7 @@
             :loading="cleanupLoading"
             @click="handleCleanupOldData"
           >
-            {{ ls.t('settings.execute') }}
+            {{ cleanupProgress || ls.t('settings.execute') }}
           </el-button>
         </div>
       </div>
@@ -661,22 +661,34 @@ async function handleDeleteCustom(key) {
 // ==================== 命令 ====================
 const reloadLoading = ref(false)
 const cleanupLoading = ref(false)
+const cleanupProgress = ref('')
 const CLEANUP_CONFIRMATION = 'DELETE_EXPIRED_HISTORY'
+// 避免异常情况下浏览器无限续批；每批后端最多删除 1000 条。
+const CLEANUP_MAX_BATCH_REQUESTS = 1000
 
 function cleanupErrorMessage(err) {
   const detail = err?.response?.data
   if (typeof detail === 'object' && detail !== null) {
     return detail.detail || ls.t('settings.cleanupFailed')
   }
+  if (err instanceof Error && err.message) return err.message
   return ls.t('settings.cleanupFailed')
 }
 
 async function handleCleanupOldData() {
   if (cleanupLoading.value) return
   cleanupLoading.value = true
+  cleanupProgress.value = ls.t('settings.cleanupPreviewing')
+  let confirmedDeleted = 0
+  let deletionStarted = false
   try {
     // 第一步只做试运行：先让管理员看到会受影响的数据，再允许实际删除。
     const preview = await runCleanupOldData({ dry_run: true })
+    const previewCount = Number(preview?.remaining_count)
+    if (Number.isFinite(previewCount) && previewCount === 0) {
+      ElMessage.success(ls.t('settings.cleanupNothingToDelete'))
+      return
+    }
     const previewOutput = typeof preview?.output === 'string' && preview.output.trim()
       ? preview.output.trim()
       : ls.t('settings.cleanupPreviewComplete')
@@ -706,16 +718,62 @@ async function handleCleanupOldData() {
     }
 
     // 第二步必须显式关闭 dry-run，并携带后端要求的不可逆操作确认令牌。
-    const res = await runCleanupOldData({
-      dry_run: false,
-      confirmation: CLEANUP_CONFIRMATION,
-    })
-    const output = res?.output || ''
-    ElMessage.success(output || ls.t('settings.cleanupSuccess'))
+    // 后端单次工作量有上限；has_more=true 时自动续批，网络中断后重试也只会
+    // 从仍存在的过期记录继续，不会回滚或重复删除已完成的批次。
+    let completed = false
+    for (let batch = 0; batch < CLEANUP_MAX_BATCH_REQUESTS; batch += 1) {
+      deletionStarted = true
+      const res = await runCleanupOldData({
+        dry_run: false,
+        confirmation: CLEANUP_CONFIRMATION,
+      })
+      const deleted = Number(res?.deleted_count)
+      const remaining = typeof res?.remaining_count === 'number'
+        ? res.remaining_count
+        : Number.NaN
+      if (Number.isFinite(deleted) && deleted > 0) confirmedDeleted += deleted
+      cleanupProgress.value = ls.t('settings.cleanupProgress', {
+        deleted: confirmedDeleted,
+        remaining: Number.isFinite(remaining) ? remaining : '?',
+      })
+
+      if (!res?.has_more) {
+        completed = true
+        break
+      }
+      if (!Number.isFinite(deleted) || deleted <= 0) {
+        throw new Error(ls.t('settings.cleanupNoProgress'))
+      }
+    }
+
+    if (!completed) {
+      ElMessage.warning(
+        ls.t('settings.cleanupBatchLimit', { count: confirmedDeleted }),
+      )
+      return
+    }
+    ElMessage.success(
+      ls.t('settings.cleanupSuccessCount', { count: confirmedDeleted }),
+    )
   } catch (err) {
-    ElMessage.error(cleanupErrorMessage(err))
+    const baseMessage = cleanupErrorMessage(err)
+    const responseStatus = Number(err?.response?.status)
+    const explicitlyRejected = [400, 401, 403, 409].includes(responseStatus)
+    let displayMessage = baseMessage
+    if (explicitlyRejected && confirmedDeleted > 0) {
+      displayMessage = `${baseMessage}；${ls.t(
+        'settings.cleanupRejectedAfterProgress',
+        { count: confirmedDeleted },
+      )}`
+    } else if (!explicitlyRejected && deletionStarted) {
+      displayMessage = `${baseMessage}；${ls.t('settings.cleanupInterrupted', {
+          count: confirmedDeleted,
+        })}`
+    }
+    ElMessage.error(displayMessage)
   } finally {
     cleanupLoading.value = false
+    cleanupProgress.value = ''
   }
 }
 

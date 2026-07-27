@@ -11,8 +11,10 @@ from django.conf import settings
 
 from services.mqtt_command_bus import (
     MAX_BROKER_ACK_TIMEOUT_SECONDS,
+    MAX_COMMAND_EXECUTE_WITHIN_SECONDS,
     MAX_DEVICE_ACK_TIMEOUT_SECONDS,
     MqttCommandBusUnavailable,
+    MqttCommandQueueFull,
     get_mqtt_command_bus,
     validate_command_timeout,
 )
@@ -110,9 +112,25 @@ class BaseCommandSendService:
                 name="device_ack_timeout",
                 maximum=MAX_DEVICE_ACK_TIMEOUT_SECONDS,
             )
-            wait_timeout = broker_timeout + (
-                device_timeout if require_device_ack else 0
-            ) + 1.0
+            confirmation_timeout = device_timeout if require_device_ack else 0.0
+
+            # 保留旧版本允许命令“开始执行”的时间窗口，避免升级后正常命令
+            # 更容易在队列中失效；但调用方的等待上限必须覆盖：
+            #   排队启动窗口 + PUBACK + 可选设备 ACK + Redis 结果传播余量。
+            # 旧实现把前者同时当成后者，网页可能已返回失败，runner 却仍在
+            # execute_before 之前合法发布。两个预算拆开后，公开 API/timeout
+            # 参数语义不变，也不会在本次同步调用结束后才开始下发命令。
+            execute_within = validate_command_timeout(
+                broker_timeout + confirmation_timeout + 1.0,
+                name="execute_within",
+                maximum=MAX_COMMAND_EXECUTE_WITHIN_SECONDS,
+            )
+            result_wait_timeout = (
+                execute_within
+                + broker_timeout
+                + confirmation_timeout
+                + 1.0
+            )
             request_id = bus.enqueue_command(
                 resource_type=resource_type,
                 resource_id=object_id,
@@ -121,9 +139,9 @@ class BaseCommandSendService:
                 require_device_ack=require_device_ack,
                 broker_ack_timeout=broker_timeout,
                 device_ack_timeout=device_timeout,
-                execute_within=wait_timeout,
+                execute_within=execute_within,
             )
-            result = bus.wait_result(request_id, timeout=wait_timeout)
+            result = bus.wait_result(request_id, timeout=result_wait_timeout)
             expected = "device_acked" if require_device_ack else "broker_acked"
             success = result.get("status") == expected
             if success:
@@ -141,6 +159,9 @@ class BaseCommandSendService:
                     result.get("error", ""),
                 )
             return success
+        except MqttCommandQueueFull as exc:
+            logger.warning("MQTT 命令积压已达上限，拒绝继续排队: %s", exc)
+            return False
         except MqttCommandBusUnavailable as exc:
             logger.error("Redis MQTT 命令总线不可用，拒绝发送: %s", exc)
             return False

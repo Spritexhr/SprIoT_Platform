@@ -7,8 +7,9 @@ MQTT传感器状态接收解析程序
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
-from django.db import transaction
+from django.db import InterfaceError, OperationalError, transaction
 from sensors.models import Sensor, SensorStatusCollection
+from services.mqtt_inbound import extract_message_id, topic_matches_binding
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,21 @@ def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
             logger.error(f"✗ 传感器不存在: {sensor_id}")
             return False
 
+        if not topic_matches_binding(topic, sensor.mqtt_topic_status):
+            logger.error(
+                "✗ 传感器状态 topic 与资源绑定不一致: sensor=%s expected=%s actual=%s",
+                sensor_id,
+                sensor.mqtt_topic_status,
+                topic,
+            )
+            return False
+
+        try:
+            message_id = extract_message_id(payload)
+        except ValueError as exc:
+            logger.error("✗ MQTT 消息幂等键无效: %s", exc)
+            return False
+
         event_name = payload['event']
         status_to_save = _extract_status_fields(sensor, payload)
         if not status_to_save:
@@ -46,7 +62,13 @@ def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
             return False
 
         timestamp = _convert_timestamp(payload['timestamp'])
-        success = _save_status(sensor, status_to_save, timestamp, event_name)
+        success = _save_status(
+            sensor,
+            status_to_save,
+            timestamp,
+            event_name,
+            message_id,
+        )
 
         if success:
             logger.info(f"✓ 状态保存成功 - 传感器: {sensor_id}, 状态: {status_to_save}")
@@ -58,6 +80,8 @@ def handle_mqtt_status_message(topic: str, payload: Dict) -> bool:
                 )
         return success
 
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.exception(f"✗ 处理MQTT状态消息时发生异常: {e}")
         return False
@@ -87,6 +111,8 @@ def _get_sensor(sensor_id: str) -> Optional[Sensor]:
     except Sensor.DoesNotExist:
         logger.warning(f"⚠ 传感器不存在: {sensor_id}")
         return None
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.error(f"✗ 查询传感器失败: {sensor_id}, 错误: {e}")
         return None
@@ -111,12 +137,52 @@ def _convert_timestamp(ts) -> datetime:
         return django_tz.now()
 
 
-def _save_status(sensor: Sensor, status_dict: Dict, timestamp: datetime, event_name: str) -> bool:
+def _save_status(
+    sensor: Sensor,
+    status_dict: Dict,
+    timestamp: datetime,
+    event_name: str,
+    message_id: Optional[str] = None,
+) -> bool:
     try:
-        SensorStatusCollection.objects.create(
-            sensor=sensor, data=status_dict, timestamp=timestamp, event_name=event_name
-        )
+        if message_id:
+            _record, created = SensorStatusCollection.objects.get_or_create(
+                sensor=sensor,
+                message_id=message_id,
+                defaults={
+                    "data": status_dict,
+                    "timestamp": timestamp,
+                    "event_name": event_name,
+                },
+            )
+            if not created:
+                if (
+                    _record.data != status_dict
+                    or _record.timestamp != timestamp
+                    or _record.event_name != event_name
+                ):
+                    logger.error(
+                        "✗ 传感器状态 message_id 冲突 - 传感器: %s, "
+                        "message_id: %s",
+                        sensor.sensor_id,
+                        message_id,
+                    )
+                    return False
+                logger.info(
+                    "✓ 跳过重复传感器状态 - 传感器: %s, message_id: %s",
+                    sensor.sensor_id,
+                    message_id,
+                )
+        else:
+            SensorStatusCollection.objects.create(
+                sensor=sensor,
+                data=status_dict,
+                timestamp=timestamp,
+                event_name=event_name,
+            )
         return True
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.error(f"✗ 状态数据保存失败 - 传感器: {sensor.sensor_id}, 错误: {e}", exc_info=True)
         return False

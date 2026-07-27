@@ -11,6 +11,7 @@ URL: /ws/projects/<project_id>/
 - 建连时 _send_initial 发一个 snapshot（含本项目可见成员的最新值 + 设备状态，现查 DB）
 - 传感器新样本：broadcast.project.sample → {event: "sample", data: PointSample}
 - 设备新状态：broadcast.device.status → 过滤已绑定后转发为 {event: "device.status", data: ...}
+- 项目成员变化：broadcast.project.membership → 重读 snapshot，并原样复用 snapshot 事件
 """
 from __future__ import annotations
 
@@ -49,6 +50,11 @@ class ProjectStreamConsumer(_BaseAuthedConsumer):
 
     async def broadcast_project_sample(self, event):
         await self.send_json({"event": "sample", "data": event["payload"]})
+
+    async def broadcast_project_membership(self, event):
+        # 成员配置变化远少于设备状态事件。只在变化通知到来时重读一次完整快照，
+        # 既能立即刷新当前值，也避免为 devices.all 的每条广播执行一次 DB 查询。
+        await self._send_initial()
 
     async def broadcast_device_status(self, event):
         payload = event["payload"]

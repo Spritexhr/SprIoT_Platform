@@ -1,13 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
+import {
+  applyColorTheme,
+  getStoredColorTheme,
+  normalizeColorTheme,
+} from '@/utils/theme'
 
-// 支持的配色方案: 'claude' | 'classic'
+// 支持的配色方案: 'apple' | 'classic'（旧值 'claude' 会自动迁移）
 // 亮暗模式: 'light' | 'dark'
 
 export const useAppStore = defineStore('app', () => {
   const sidebarCollapsed = ref(false)
   const theme = ref(localStorage.getItem('iot-theme') || 'light')
-  const colorTheme = ref(localStorage.getItem('iot-color-theme') || 'claude')
+  const colorTheme = ref(getStoredColorTheme())
   const sidebarDrawerVisible = ref(false)
 
   function toggleSidebar() {
@@ -23,9 +28,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function setColorTheme(name) {
-    colorTheme.value = name
-    localStorage.setItem('iot-color-theme', name)
-    applyTheme()
+    colorTheme.value = normalizeColorTheme(name)
   }
 
   function applyTheme() {
@@ -39,14 +42,10 @@ export const useAppStore = defineStore('app', () => {
     localStorage.setItem('iot-theme', theme.value)
 
     // 配色方案
-    root.classList.remove('theme-classic', 'theme-claude')
-    if (colorTheme.value !== 'claude') {
-      root.classList.add(`theme-${colorTheme.value}`)
-    }
+    applyColorTheme(root, colorTheme.value)
   }
 
-  watch(theme, () => { applyTheme() }, { immediate: true })
-  watch(colorTheme, () => { applyTheme() }, { immediate: false })
+  watch([theme, colorTheme], () => { applyTheme() }, { immediate: true, flush: 'sync' })
 
   return {
     sidebarCollapsed,

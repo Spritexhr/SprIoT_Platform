@@ -2,13 +2,14 @@
   <header class="app-header">
     <!-- 左侧：移动端汉堡按钮 + 面包屑 -->
     <div class="app-header__left">
-      <el-icon
+      <button
+        type="button"
         class="mobile-menu-btn"
-        :size="20"
+        :aria-label="ls.locale === 'zh' ? '打开导航菜单' : 'Open navigation'"
         @click="$emit('toggle-drawer')"
       >
-        <Operation />
-      </el-icon>
+        <el-icon :size="19"><Operation /></el-icon>
+      </button>
       <el-breadcrumb separator="/">
         <el-breadcrumb-item :to="{ path: '/' }">{{ ls.t('header.home') }}</el-breadcrumb-item>
         <template v-if="breadcrumbItems.length">
@@ -31,6 +32,8 @@
         class="mqtt-status"
         :class="mqttConnected ? 'mqtt-status--online' : 'mqtt-status--offline'"
         :title="mqttConnected ? ls.t('header.mqttConnected') : ls.t('header.mqttDisconnected')"
+        role="status"
+        aria-live="polite"
       >
         <span
           class="iot-status-dot"
@@ -42,19 +45,19 @@
       <!-- 外观主题选择 -->
       <el-tooltip :content="ls.t('header.theme')" placement="bottom">
         <el-dropdown trigger="click" @command="handleColorTheme">
-          <button class="header-action-btn">
+          <button type="button" class="header-action-btn" :aria-label="ls.t('header.theme')">
             <el-icon :size="18"><Brush /></el-icon>
           </button>
           <template #dropdown>
             <el-dropdown-menu>
               <div class="theme-menu-title">{{ ls.t('header.theme') }}</div>
               <el-dropdown-item
-                command="claude"
-                :class="{ 'is-active-item': appStore.colorTheme === 'claude' }"
+                command="apple"
+                :class="{ 'is-active-item': appStore.colorTheme === 'apple' }"
               >
-                <span class="theme-dot theme-dot--claude"></span>
-                {{ ls.t('header.themeClaude') }}
-                <el-icon v-if="appStore.colorTheme === 'claude'" class="check-icon"><Check /></el-icon>
+                <span class="theme-dot theme-dot--apple"></span>
+                {{ ls.t('header.themeApple') }}
+                <el-icon v-if="appStore.colorTheme === 'apple'" class="check-icon"><Check /></el-icon>
               </el-dropdown-item>
               <el-dropdown-item
                 command="classic"
@@ -77,21 +80,21 @@
 
       <!-- 语言切换 -->
       <el-tooltip :content="ls.t('header.lang')" placement="bottom">
-        <button class="header-action-btn lang-btn" @click="ls.toggleLocale()">
+        <button type="button" class="header-action-btn lang-btn" :aria-label="ls.t('header.lang')" @click="ls.toggleLocale()">
           <span class="lang-text">{{ ls.locale === 'zh' ? 'EN' : '中' }}</span>
         </button>
       </el-tooltip>
 
       <!-- 全屏切换 -->
       <el-tooltip :content="ls.t('header.fullscreen')" placement="bottom">
-        <button class="header-action-btn" @click="toggleFullscreen">
+        <button type="button" class="header-action-btn" :aria-label="ls.t('header.fullscreen')" @click="toggleFullscreen">
           <el-icon :size="18"><FullScreen /></el-icon>
         </button>
       </el-tooltip>
 
       <!-- 用户下拉菜单 -->
       <el-dropdown trigger="click" @command="handleUserCommand">
-        <button class="user-menu-btn">
+        <button type="button" class="user-menu-btn" :aria-label="ls.locale === 'zh' ? '打开用户菜单' : 'Open user menu'">
           <el-avatar :size="28" class="user-avatar">{{ avatarText }}</el-avatar>
           <span class="user-name">{{ userStore.username || ls.t('header.currentUser') }}</span>
           <el-icon :size="12"><ArrowDown /></el-icon>
@@ -346,93 +349,120 @@ async function handleLogout() {
 
 <style scoped>
 .app-header {
-  height: var(--iot-header-height);
-  background: var(--iot-bg-header);
-  border-bottom: 1px solid var(--iot-border-color-light);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 var(--iot-spacing-lg);
   position: sticky;
   top: 0;
   z-index: 999;
-  transition: background-color var(--iot-transition-base);
-  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--iot-header-height);
+  padding: 0 var(--iot-spacing-lg);
+  background: var(--iot-bg-header);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(175%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(175%);
+  transition: background-color var(--iot-transition-base), box-shadow var(--iot-transition-base);
+}
+
+.app-header::after {
+  position: absolute;
+  right: 0;
+  bottom: -10px;
+  left: 0;
+  height: 10px;
+  pointer-events: none;
+  content: '';
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--iot-bg-page-deep) 16%, transparent), transparent);
 }
 
 .app-header__left {
   display: flex;
   align-items: center;
   gap: var(--iot-spacing-md);
+  min-width: 0;
 }
 
 .mobile-menu-btn {
   display: none;
-  cursor: pointer;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--iot-radius-base);
+  background: transparent;
   color: var(--iot-text-regular);
-  padding: 4px;
-  border-radius: var(--iot-radius-sm);
-  transition: color var(--iot-transition-fast);
+  cursor: pointer;
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast), transform var(--iot-transition-instant);
 }
 
 .mobile-menu-btn:hover {
+  background: var(--iot-material-thin);
   color: var(--iot-color-primary);
+}
+
+.mobile-menu-btn:active { transform: scale(0.94); }
+
+.app-header__left :deep(.el-breadcrumb) {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .app-header__right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
-/* MQTT 状态 */
 .mqtt-status {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
-  border-radius: 20px;
-  background: var(--iot-border-color-lighter);
+  min-height: 32px;
+  margin-right: 6px;
+  padding: 4px 11px;
   border: 1px solid var(--iot-border-color-light);
+  border-radius: var(--iot-radius-pill);
+  background: var(--iot-material-thin);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
   font-size: var(--iot-font-size-xs);
   cursor: default;
-  margin-right: 4px;
 }
 
 .mqtt-label {
-  font-weight: 500;
+  font-weight: 600;
   transition: color var(--iot-transition-fast);
 }
 
 .mqtt-status--online .mqtt-label { color: var(--iot-color-success); }
 .mqtt-status--offline .mqtt-label { color: var(--iot-text-secondary); }
 
-/* 操作按钮 */
 .header-action-btn {
-  width: 34px;
-  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 40px;
+  height: 40px;
   border: none;
-  background: transparent;
   border-radius: var(--iot-radius-base);
+  background: transparent;
   color: var(--iot-text-secondary);
   cursor: pointer;
-  transition: all var(--iot-transition-fast);
+  transition: color var(--iot-transition-fast), background-color var(--iot-transition-fast), transform var(--iot-transition-instant);
 }
 
 .header-action-btn:hover {
-  background: var(--iot-border-color-lighter);
+  background: var(--iot-material-thin);
   color: var(--iot-color-primary);
 }
 
-/* 语言切换按钮 */
+.header-action-btn:active { transform: scale(0.94); }
+
 .lang-btn {
-  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--iot-text-secondary);
 }
 
 .lang-text {
@@ -440,27 +470,33 @@ async function handleLogout() {
   font-weight: 700;
 }
 
-/* 主题菜单内部 */
 .theme-menu-title {
-  padding: 4px 12px 4px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: 5px 12px 4px;
   color: var(--iot-text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.055em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 
 .theme-dot {
   display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  margin-right: 6px;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
+  margin-right: 8px;
+  border-radius: 50%;
 }
 
-.theme-dot--claude { background: linear-gradient(135deg, #F5F0EB, #D97757); border: 1px solid #DDD5C8; }
-.theme-dot--classic { background: linear-gradient(135deg, #E8F0FE, #1A73E8); border: 1px solid #C5D8FF; }
+.theme-dot--apple {
+  background: #e5663d;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.theme-dot--classic {
+  background: #1671d9;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
 
 .check-icon {
   margin-left: auto;
@@ -473,48 +509,73 @@ async function handleLogout() {
   background-color: var(--iot-color-primary-bg) !important;
 }
 
-/* 用户菜单按钮 */
 .user-menu-btn {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px 4px 4px;
-  border: 1px solid var(--iot-border-color);
-  background: var(--iot-bg-card);
-  border-radius: 22px;
-  cursor: pointer;
-  color: var(--iot-text-regular);
-  transition: all var(--iot-transition-fast);
-  box-shadow: var(--iot-shadow-sm);
+  min-height: 42px;
   margin-left: 4px;
+  padding: 4px 12px 4px 4px;
+  border: 1px solid var(--iot-border-color-light);
+  border-radius: var(--iot-radius-pill);
+  background: var(--iot-material-regular);
+  color: var(--iot-text-regular);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-xs);
+  cursor: pointer;
+  transition: border-color var(--iot-transition-fast), background-color var(--iot-transition-fast), box-shadow var(--iot-transition-fast), transform var(--iot-transition-instant);
 }
 
 .user-menu-btn:hover {
-  border-color: var(--iot-color-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-color: color-mix(in srgb, var(--iot-color-primary) 34%, var(--iot-border-color-light));
+  background: var(--iot-bg-card-hover);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-sm);
 }
+
+.user-menu-btn:active { transform: scale(0.97); }
 
 .user-avatar {
   background: linear-gradient(135deg, var(--iot-color-primary), var(--iot-color-primary-light));
-  color: #fff;
+  color: var(--iot-text-inverse);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .user-name {
-  font-size: var(--iot-font-size-sm);
-  font-weight: 500;
   max-width: 100px;
   overflow: hidden;
+  color: var(--iot-text-primary);
+  font-size: var(--iot-font-size-sm);
+  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--iot-text-primary);
 }
 
-/* 响应式：移动端 */
 @media (max-width: 767px) {
   .mobile-menu-btn { display: flex; }
   .user-name { display: none; }
   .mqtt-status { display: none; }
+  .app-header { padding: 0 var(--iot-spacing-sm); }
+  .app-header__left { gap: var(--iot-spacing-xs); }
+  .app-header__left :deep(.el-breadcrumb__item:not(:last-child)) { display: none; }
+  .header-action-btn { width: 38px; height: 38px; }
+  .user-menu-btn { min-height: 40px; padding-right: 7px; }
+}
+
+@media (max-width: 480px) {
+  .app-header__left :deep(.el-breadcrumb) { max-width: 112px; }
+  .app-header__right > :nth-child(4) { display: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .app-header {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-menu-btn:active,
+  .header-action-btn:active,
+  .user-menu-btn:active { transform: none; }
 }
 </style>

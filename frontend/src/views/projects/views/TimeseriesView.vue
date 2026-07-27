@@ -83,6 +83,7 @@ import * as echarts from 'echarts'
 
 import { getProjectSeries, updateView } from '@/api/projects'
 import { useProjectStore } from '@/stores/project'
+import { readChartTheme, withAlpha } from '@/utils/chartTheme'
 
 const props = defineProps({
   view: { type: Object, required: true },
@@ -174,42 +175,33 @@ function coerceNumber(v) {
 function renderChart() {
   if (!chartEl.value) return
   if (!chartInstance) chartInstance = echarts.init(chartEl.value)
-  
-  const isDark = document.documentElement.classList.contains('dark')
-  const textClr = isDark ? '#C8BCB0' : '#4A4035'
-  const splitLineClr = isDark ? '#2D2924' : '#EDE8E0'
-  
-  // 动态读取当前主题的主色调
-  const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--iot-color-primary').trim() || '#D97757'
+  const theme = readChartTheme()
   
   const points = seriesData.value.points || []
   const events = seriesData.value.events || []
   const fields = selectedFields.value.length ? selectedFields.value : availableFields.value.slice(0, 2)
 
-  // 优雅的曲线调色板，首选当前主色
-  const lineColors = [primaryColor, '#4CAF82', '#D4A017', '#C94A3A', '#8B7B6B', '#3b82f6', '#8b5cf6']
-
-  const series = fields.map((field, idx) => ({
-    name: field,
-    type: 'line',
-    smooth: true,
-    showSymbol: points.length < 200,
-    connectNulls: false,
-    sampling: 'lttb',
-    itemStyle: {
-      color: lineColors[idx % lineColors.length]
-    },
-    lineStyle: {
-      width: 2.5
-    },
-    areaStyle: {
-      color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-        { offset: 0, color: lineColors[idx % lineColors.length] + '22' },
-        { offset: 1, color: lineColors[idx % lineColors.length] + '00' }
-      ])
-    },
-    data: points.map((p) => [p.t, coerceNumber(p.data?.[field])]),
-  }))
+  const series = fields.map((field, idx) => {
+    const color = theme.palette[idx % theme.palette.length]
+    return {
+      name: field,
+      type: 'line',
+      smooth: true,
+      showSymbol: points.length < 200,
+      connectNulls: false,
+      sampling: 'lttb',
+      itemStyle: { color },
+      lineStyle: { color, width: 2.5 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: withAlpha(color, 0.14) },
+          { offset: 1, color: withAlpha(color, 0) },
+        ]),
+      },
+      emphasis: { focus: 'series' },
+      data: points.map((p) => [p.t, coerceNumber(p.data?.[field])]),
+    }
+  })
 
   const visibleEvents = events.filter((e) => e.event !== 'heartbeat')
   if (visibleEvents.length && series.length) {
@@ -218,14 +210,14 @@ function renderChart() {
       markLine: {
         symbol: 'none',
         silent: true,
-        lineStyle: { color: primaryColor + '66', type: 'dashed' },
+        lineStyle: { color: withAlpha(theme.warning, 0.62), type: 'dashed' },
         data: visibleEvents.slice(0, 50).map((e) => ({
           xAxis: e.t,
           label: {
             formatter: e.event || '',
             position: 'end',
             fontSize: 9,
-            color: textClr
+            color: theme.warning,
           },
         })),
       },
@@ -234,33 +226,47 @@ function renderChart() {
 
   chartInstance.setOption({
     backgroundColor: 'transparent',
+    color: theme.palette,
     textStyle: {
-      fontFamily: 'inherit',
-      color: textClr
+      fontFamily: theme.fontFamily,
+      color: theme.textRegular,
     },
     tooltip: { 
-      trigger: 'axis', 
-      axisPointer: { type: 'cross', label: { backgroundColor: '#8B7B6B' } },
-      backgroundColor: isDark ? '#2D2924' : '#FDFCFB',
-      borderColor: isDark ? '#3D352D' : '#DDD5C8',
-      textStyle: { color: textClr }
+      trigger: 'axis',
+      confine: true,
+      backgroundColor: theme.surface,
+      borderColor: theme.border,
+      borderWidth: 1,
+      padding: 12,
+      textStyle: { color: theme.textPrimary, fontFamily: theme.fontFamily },
+      axisPointer: {
+        type: 'cross',
+        lineStyle: { color: withAlpha(theme.primary, 0.52) },
+        crossStyle: { color: withAlpha(theme.primary, 0.52) },
+        label: { color: theme.textInverse, backgroundColor: theme.primary },
+      },
+      extraCssText: `border-radius:${theme.radius}px;box-shadow:0 12px 32px ${withAlpha(theme.textPrimary, 0.14)};backdrop-filter:blur(18px);`,
     },
     legend: { 
       data: fields, 
       top: 0,
-      textStyle: { color: textClr }
+      textStyle: { color: theme.textRegular, fontFamily: theme.fontFamily },
     },
     grid: { left: 40, right: 40, top: 65, bottom: 85, containLabel: true },
     xAxis: { 
       type: 'time', 
-      axisLabel: { hideOverlap: true, color: textClr },
-      splitLine: { show: true, lineStyle: { color: splitLineClr } }
+      axisLine: { lineStyle: { color: theme.separator } },
+      axisTick: { lineStyle: { color: theme.separator } },
+      axisLabel: { hideOverlap: true, color: theme.textSecondary },
+      splitLine: { show: true, lineStyle: { color: theme.separator } },
     },
     yAxis: { 
       type: 'value', 
       scale: true,
-      axisLabel: { color: textClr },
-      splitLine: { show: true, lineStyle: { color: splitLineClr } }
+      axisLine: { lineStyle: { color: theme.separator } },
+      axisTick: { lineStyle: { color: theme.separator } },
+      axisLabel: { color: theme.textSecondary },
+      splitLine: { show: true, lineStyle: { color: theme.separator } },
     },
     dataZoom: [
       { type: 'inside' }, 
@@ -268,11 +274,21 @@ function renderChart() {
         type: 'slider', 
         height: 20, 
         bottom: 10,
-        textStyle: { color: textClr },
-        borderColor: splitLineClr,
-        fillerColor: isDark ? primaryColor + '26' : primaryColor + '1a',
-        handleStyle: { color: '#8B7B6B' }
-      }
+        textStyle: { color: theme.textSecondary },
+        borderColor: theme.separator,
+        backgroundColor: theme.material,
+        fillerColor: withAlpha(theme.primary, 0.14),
+        dataBackground: {
+          lineStyle: { color: withAlpha(theme.textSecondary, 0.32) },
+          areaStyle: { color: withAlpha(theme.textSecondary, 0.08) },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: withAlpha(theme.primary, 0.64) },
+          areaStyle: { color: withAlpha(theme.primary, 0.12) },
+        },
+        handleStyle: { color: theme.primary, borderColor: theme.surface },
+        moveHandleStyle: { color: theme.primary },
+      },
     ],
     series,
   }, { notMerge: true })
@@ -299,15 +315,18 @@ async function saveDefault() {
 }
 
 let themeObserver = null
+let themeFrame = null
 let resizeObserver = null
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   
-  // 观察暗色模式切换重新载入图表
+  // 根节点主题类变化后，在样式完成计算的下一帧刷新整套图表颜色。
   themeObserver = new MutationObserver(() => {
-    if (chartInstance && hasPoints.value) {
-      renderChart()
-    }
+    if (themeFrame) cancelAnimationFrame(themeFrame)
+    themeFrame = requestAnimationFrame(() => {
+      themeFrame = null
+      if (chartInstance && hasPoints.value) renderChart()
+    })
   })
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
   
@@ -335,6 +354,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
   if (themeObserver) {
     themeObserver.disconnect()
+  }
+  if (themeFrame) {
+    cancelAnimationFrame(themeFrame)
+    themeFrame = null
   }
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -425,4 +448,3 @@ watch(selectedFields, () => {
   }
 }
 </style>
-

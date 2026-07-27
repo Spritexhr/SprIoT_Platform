@@ -45,18 +45,24 @@
           'is-drop-ready': draggingCount > 0,
           'is-drop-active': dropTargetId === folder.id,
         }"
-        @click="navigate('folder', folder.id)"
         @dragenter.prevent.stop="dropTargetId = folder.id"
         @dragover.prevent.stop="dropTargetId = folder.id"
         @dragleave="handleDragLeave"
         @drop.prevent.stop="handleDrop(folder.id)"
       >
-        <el-icon class="folder-icon"><FolderOpened v-if="dropTargetId === folder.id" /><Folder v-else /></el-icon>
-        <div class="folder-meta">
-          <strong>{{ folder.name }}</strong>
-          <span>{{ folder.resource_count }} {{ ls.t('resourceFolders.resourceUnit') }} · {{ folder.child_count }} {{ ls.t('resourceFolders.childUnit') }}</span>
-          <em v-if="dropTargetId === folder.id">{{ ls.t('resourceFolders.dropHere') }}</em>
-        </div>
+        <button
+          type="button"
+          class="folder-card__main"
+          :aria-label="`${folder.name}，${folder.resource_count} ${ls.t('resourceFolders.resourceUnit')}`"
+          @click="navigate('folder', folder.id)"
+        >
+          <el-icon class="folder-icon"><FolderOpened v-if="dropTargetId === folder.id" /><Folder v-else /></el-icon>
+          <span class="folder-meta">
+            <strong>{{ folder.name }}</strong>
+            <span>{{ folder.resource_count }} {{ ls.t('resourceFolders.resourceUnit') }} · {{ folder.child_count }} {{ ls.t('resourceFolders.childUnit') }}</span>
+            <em v-if="dropTargetId === folder.id">{{ ls.t('resourceFolders.dropHere') }}</em>
+          </span>
+        </button>
         <el-dropdown v-if="isStaff" trigger="click" @command="(command) => onFolderCommand(command, folder)" @click.stop>
           <el-button text circle :icon="MoreFilled" @click.stop />
           <template #dropdown>
@@ -278,50 +284,409 @@ onMounted(loadFolders)
 .folder-browser {
   position: relative;
   overflow: hidden;
-  padding: 22px;
-  border: 1px solid color-mix(in srgb, var(--iot-color-primary) 16%, transparent);
+  padding: var(--iot-spacing-lg);
+  border: 1px solid var(--iot-border-color-light);
   background:
-    radial-gradient(circle at 92% 0, color-mix(in srgb, var(--iot-color-primary) 11%, transparent), transparent 30%),
-    linear-gradient(145deg, var(--iot-bg-card) 0%, color-mix(in srgb, var(--iot-bg-page) 96%, var(--iot-color-primary)) 100%);
+    radial-gradient(circle at 92% 0, color-mix(in srgb, var(--iot-color-primary) 9%, transparent), transparent 32%),
+    var(--iot-material-regular);
+  box-shadow: var(--iot-shadow-sm);
+  backdrop-filter: blur(var(--iot-material-blur)) saturate(145%);
+  -webkit-backdrop-filter: blur(var(--iot-material-blur)) saturate(145%);
+  transition:
+    border-color var(--iot-transition-fast),
+    box-shadow var(--iot-transition-fast),
+    background-color var(--iot-transition-fast);
 }
-.folder-browser::after { content: ''; position: absolute; top: -28px; right: -22px; width: 110px; height: 76px; border: 1px solid color-mix(in srgb, var(--iot-color-primary) 10%, transparent); border-radius: 50%; transform: rotate(-12deg); pointer-events: none; }
-.folder-browser.is-dragging-resources { border-color: color-mix(in srgb, var(--iot-color-primary) 48%, transparent); box-shadow: 0 12px 34px color-mix(in srgb, var(--iot-color-primary) 10%, transparent); }
-.folder-intro { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-.folder-intro__icon { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 13px; color: var(--iot-color-primary-dark); background: var(--iot-color-primary-bg); font-size: 22px; }
-.folder-intro h2 { margin: 0; color: var(--iot-text-primary); font-size: 17px; }
-.folder-intro p { margin: 4px 0 0; color: var(--iot-text-secondary); font-size: 13px; }
-.folder-toolbar { position: relative; z-index: 1; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.folder-modes { display: flex; gap: 6px; padding: 4px; border: 1px solid rgba(113, 91, 76, .1); border-radius: 12px; background: rgba(255, 255, 255, .68); flex-wrap: wrap; }
-.folder-modes :deep(.el-button) { margin: 0; border: 0; border-radius: 9px; box-shadow: none; }
-.folder-breadcrumb { margin-top: 18px; padding: 11px 14px; border-radius: 10px; background: rgba(255,255,255,.62); }
-.crumb-button { border: 0; padding: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
-.crumb-button:hover { color: var(--iot-color-primary); }
-.folder-drag-hint { display: flex; align-items: center; gap: 9px; margin-top: 14px; padding: 10px 13px; border: 1px dashed color-mix(in srgb, var(--iot-color-primary) 55%, transparent); border-radius: 10px; color: var(--iot-color-primary-dark); background: color-mix(in srgb, var(--iot-color-primary) 8%, var(--iot-bg-card)); font-size: 13px; }
-.folder-drag-hint__pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--iot-color-primary); box-shadow: 0 0 0 5px color-mix(in srgb, var(--iot-color-primary) 14%, transparent); animation: drop-pulse 1.2s infinite; }
-.folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 13px; margin-top: 18px; }
-.folder-card { position: relative; display: flex; align-items: center; gap: 13px; min-height: 84px; padding: 15px; overflow: hidden; border: 1px solid rgba(113, 91, 76, .14); border-radius: 14px; background: rgba(255, 255, 255, .84); box-shadow: 0 5px 16px rgba(81, 62, 48, .045); cursor: pointer; transition: border-color .18s, transform .18s, box-shadow .18s, background .18s; }
-.folder-card::before { content: ''; position: absolute; top: 0; left: 16px; width: 46px; height: 4px; border-radius: 0 0 4px 4px; background: color-mix(in srgb, var(--iot-color-primary) 42%, transparent); }
-.folder-card:hover { border-color: color-mix(in srgb, var(--iot-color-primary) 52%, transparent); box-shadow: 0 9px 22px color-mix(in srgb, var(--iot-color-primary) 9%, transparent); transform: translateY(-2px); }
-.folder-card.is-drop-ready { border-style: dashed; }
-.folder-card.is-drop-active { border-color: var(--iot-color-primary); border-style: solid; background: var(--iot-color-primary-bg); box-shadow: 0 0 0 4px color-mix(in srgb, var(--iot-color-primary) 14%, transparent), 0 12px 26px rgba(0, 0, 0, 0.15); transform: translateY(-3px) scale(1.01); }
-.folder-icon { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 12px; color: var(--iot-color-primary); background: var(--iot-color-primary-bg); font-size: 25px; }
-.is-drop-active .folder-icon { color: #fff; background: var(--iot-color-primary); }
-.folder-meta { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; }
-.folder-meta strong { overflow: hidden; color: var(--iot-text-primary); text-overflow: ellipsis; white-space: nowrap; }
-.folder-meta span { color: var(--iot-text-secondary); font-size: 12px; }
-.folder-meta em { color: var(--iot-color-primary-dark); font-size: 12px; font-style: normal; font-weight: 600; }
-.drag-hint-enter-active, .drag-hint-leave-active { transition: opacity .18s, transform .18s; }
-.drag-hint-enter-from, .drag-hint-leave-to { opacity: 0; transform: translateY(-5px); }
-@keyframes drop-pulse { 50% { box-shadow: 0 0 0 8px transparent; } }
-:global(html.dark) .folder-browser { background: radial-gradient(circle at 92% 0, color-mix(in srgb, var(--iot-color-primary) 10%, transparent), transparent 30%), linear-gradient(145deg, var(--iot-bg-card), var(--iot-bg-page)); }
-:global(html.dark) .folder-modes, :global(html.dark) .folder-breadcrumb { background: rgba(255,255,255,.035); }
-:global(html.dark) .folder-card { border-color: var(--iot-border-color); background: var(--iot-bg-card); }
-:global(html.dark) .folder-card.is-drop-active { border-color: var(--iot-color-primary); background: var(--iot-color-primary-bg); }
+
+.folder-browser::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+  pointer-events: none;
+}
+
+.folder-browser.is-dragging-resources {
+  border-color: color-mix(in srgb, var(--iot-color-primary) 52%, transparent);
+  box-shadow: var(--iot-focus-ring), var(--iot-shadow-md);
+}
+
+.folder-intro {
+  display: flex;
+  align-items: center;
+  gap: var(--iot-spacing-sm);
+  margin-bottom: var(--iot-spacing-md);
+}
+
+.folder-intro__icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--iot-color-primary) 16%, transparent);
+  border-radius: var(--iot-radius-base);
+  color: var(--iot-color-primary-dark);
+  background: var(--iot-color-primary-bg);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+  font-size: 22px;
+}
+
+.folder-intro h2 {
+  margin: 0;
+  color: var(--iot-text-primary);
+  font-family: var(--iot-font-display);
+  font-size: var(--iot-font-size-md);
+  letter-spacing: -0.012em;
+}
+
+.folder-intro p {
+  margin: var(--iot-spacing-2xs) 0 0;
+  color: var(--iot-text-secondary);
+  font-size: var(--iot-font-size-sm);
+}
+
+.folder-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--iot-spacing-sm);
+  flex-wrap: wrap;
+}
+
+.folder-modes {
+  display: flex;
+  gap: var(--iot-spacing-2xs);
+  padding: var(--iot-spacing-2xs);
+  border: 1px solid var(--iot-separator);
+  border-radius: var(--iot-radius-base);
+  background: var(--iot-material-thick);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-xs);
+  flex-wrap: wrap;
+}
+
+.folder-modes :deep(.el-button) {
+  min-height: 38px;
+  margin: 0;
+  border: 0;
+  border-radius: var(--iot-radius-sm);
+  box-shadow: none;
+  touch-action: manipulation;
+}
+
+.folder-modes :deep(.el-button:active:not(.is-disabled)) {
+  transform: scale(0.97);
+  transition-duration: 100ms;
+}
+
+.folder-modes :deep(.el-button:focus-visible),
+.folder-card :deep(.el-button:focus-visible) {
+  outline: none;
+  box-shadow: var(--iot-focus-ring) !important;
+}
+
+.folder-breadcrumb {
+  margin-top: var(--iot-spacing-md);
+  padding: var(--iot-spacing-sm) var(--iot-spacing-md);
+  border: 1px solid var(--iot-separator);
+  border-radius: var(--iot-radius-base);
+  background: var(--iot-material-thick);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-xs);
+}
+
+.crumb-button {
+  border: 0;
+  border-radius: var(--iot-radius-xs);
+  padding: 2px 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  touch-action: manipulation;
+  transition:
+    color var(--iot-transition-fast),
+    background-color var(--iot-transition-fast),
+    transform var(--iot-transition-instant);
+}
+
+.crumb-button:hover {
+  color: var(--iot-color-primary);
+  background: var(--iot-color-primary-bg);
+}
+
+.crumb-button:active {
+  transform: scale(0.96);
+}
+
+.crumb-button:focus-visible {
+  outline: none;
+  box-shadow: var(--iot-focus-ring);
+}
+
+.folder-drag-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--iot-spacing-xs);
+  margin-top: var(--iot-spacing-sm);
+  padding: var(--iot-spacing-sm) var(--iot-spacing-md);
+  border: 1px dashed color-mix(in srgb, var(--iot-color-primary) 58%, transparent);
+  border-radius: var(--iot-radius-base);
+  color: var(--iot-color-primary-dark);
+  background: color-mix(in srgb, var(--iot-bg-card-solid) 88%, var(--iot-color-primary));
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+  font-size: var(--iot-font-size-sm);
+}
+
+.folder-drag-hint__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--iot-radius-round);
+  background: var(--iot-color-primary);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--iot-color-primary) 14%, transparent);
+  animation: drop-pulse 1.2s var(--iot-ease-standard) infinite;
+}
+
+.folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
+  gap: var(--iot-spacing-sm);
+  margin-top: var(--iot-spacing-md);
+}
+
+.folder-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--iot-spacing-sm);
+  min-height: 84px;
+  padding: var(--iot-spacing-md);
+  overflow: hidden;
+  border: 1px solid var(--iot-border-color-light);
+  border-radius: var(--iot-radius-lg);
+  background: var(--iot-bg-card-solid);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    border-color var(--iot-transition-fast),
+    transform var(--iot-transition-fast),
+    box-shadow var(--iot-transition-fast),
+    background-color var(--iot-transition-fast);
+}
+
+.folder-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--iot-spacing-md);
+  width: 46px;
+  height: 4px;
+  border-radius: 0 0 var(--iot-radius-xs) var(--iot-radius-xs);
+  background: color-mix(in srgb, var(--iot-color-primary) 42%, transparent);
+}
+
+.folder-card__main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--iot-spacing-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--iot-radius-base);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-card__main:focus-visible {
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .folder-card:hover {
+    border-color: color-mix(in srgb, var(--iot-color-primary) 48%, transparent);
+    background: var(--iot-bg-card-hover);
+    box-shadow: inset 0 1px 0 var(--iot-highlight-edge), var(--iot-shadow-base);
+    transform: translateY(-2px);
+  }
+}
+
+.folder-card:active {
+  transform: translateY(0) scale(0.985);
+  transition-duration: 100ms;
+}
+
+.folder-card:focus-within {
+  border-color: var(--iot-color-primary);
+  box-shadow: var(--iot-focus-ring), var(--iot-shadow-base);
+}
+
+.folder-card.is-drop-ready {
+  border-style: dashed;
+}
+
+.folder-card.is-drop-active {
+  border-color: var(--iot-color-primary);
+  border-style: solid;
+  background: color-mix(in srgb, var(--iot-bg-card-solid) 78%, var(--iot-color-primary));
+  box-shadow: var(--iot-focus-ring), var(--iot-shadow-md);
+  transform: translateY(-3px) scale(1.01);
+}
+
+.folder-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--iot-color-primary) 14%, transparent);
+  border-radius: var(--iot-radius-base);
+  color: var(--iot-color-primary);
+  background: var(--iot-color-primary-bg);
+  box-shadow: inset 0 1px 0 var(--iot-highlight-edge);
+  font-size: 25px;
+}
+
+.is-drop-active .folder-icon {
+  border-color: var(--iot-color-primary);
+  color: var(--iot-text-inverse);
+  background: var(--iot-color-primary);
+  box-shadow: none;
+}
+
+.folder-meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--iot-spacing-2xs);
+}
+
+.folder-meta strong {
+  overflow: hidden;
+  color: var(--iot-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-meta span {
+  color: var(--iot-text-secondary);
+  font-size: var(--iot-font-size-xs);
+}
+
+.folder-meta em {
+  color: var(--iot-color-primary-dark);
+  font-size: var(--iot-font-size-xs);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.drag-hint-enter-active,
+.drag-hint-leave-active {
+  transition:
+    opacity var(--iot-transition-fast),
+    transform var(--iot-transition-fast);
+}
+
+.drag-hint-enter-from,
+.drag-hint-leave-to {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
+@keyframes drop-pulse {
+  50% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .folder-browser,
+  .folder-card,
+  .crumb-button,
+  .folder-modes :deep(.el-button) {
+    transition-duration: 1ms !important;
+  }
+
+  .folder-card:hover,
+  .folder-card:active,
+  .folder-card.is-drop-active,
+  .crumb-button:active,
+  .folder-modes :deep(.el-button:active:not(.is-disabled)) {
+    transform: none;
+  }
+
+  .folder-drag-hint__pulse {
+    animation: none;
+  }
+
+  .drag-hint-enter-active,
+  .drag-hint-leave-active {
+    transition: opacity 120ms ease-out;
+  }
+
+  .drag-hint-enter-from,
+  .drag-hint-leave-to {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .folder-browser {
+    background: var(--iot-bg-card-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .folder-modes,
+  .folder-breadcrumb,
+  .folder-card {
+    background: var(--iot-bg-card-solid);
+  }
+
+  .folder-browser::after {
+    box-shadow: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .folder-browser,
+  .folder-modes,
+  .folder-breadcrumb,
+  .folder-card {
+    border-color: var(--iot-border-color);
+  }
+}
+
 @media (max-width: 640px) {
-  .folder-browser { padding: 16px; }
-  .folder-toolbar { align-items: stretch; flex-direction: column; }
-  .folder-modes { display: grid; grid-template-columns: 1fr 1fr; }
-  .folder-modes :deep(.el-button:first-child) { grid-column: 1 / -1; }
-  .folder-grid { grid-template-columns: 1fr; }
+  .folder-browser {
+    padding: var(--iot-spacing-md);
+  }
+
+  .folder-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .folder-modes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .folder-modes :deep(.el-button) {
+    min-height: 44px;
+  }
+
+  .folder-modes :deep(.el-button:first-child) {
+    grid-column: 1 / -1;
+  }
+
+  .folder-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

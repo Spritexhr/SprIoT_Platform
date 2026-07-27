@@ -321,6 +321,14 @@ class SensorStatusCollection(models.Model):
         help_text="传感器状态事件的名称，例如：online、offline、interval_updated"
     )
 
+    message_id = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        verbose_name="MQTT 消息幂等 ID",
+        help_text="设备可选上报；同一传感器内用于去重 QoS 重投消息",
+    )
+
     received_at = models.DateTimeField(
         auto_now_add=True,
         db_index=True,
@@ -337,6 +345,12 @@ class SensorStatusCollection(models.Model):
             models.Index(
                 fields=['sensor', '-received_at'],
                 name='sensor_recv_latest_idx',
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sensor', 'message_id'],
+                name='uniq_sensor_status_msg',
             ),
         ]
     
@@ -377,7 +391,15 @@ class SensorData(models.Model):
         verbose_name="数据时间",
         help_text="数据采集的时间戳"
     )
-    
+
+    message_id = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        verbose_name="MQTT 消息幂等 ID",
+        help_text="设备可选上报；同一传感器内用于去重 QoS 重投消息",
+    )
+
     received_at = models.DateTimeField(
         auto_now_add=True,
         db_index=True,
@@ -394,6 +416,12 @@ class SensorData(models.Model):
             models.Index(
                 fields=['sensor', '-received_at'],
                 name='sensor_data_recv_idx',
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['sensor', 'message_id'],
+                name='uniq_sensor_data_msg',
             ),
         ]
     

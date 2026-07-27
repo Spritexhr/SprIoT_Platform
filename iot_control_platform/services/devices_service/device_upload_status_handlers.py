@@ -7,8 +7,9 @@ MQTT设备状态接收解析程序
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
-from django.db import transaction
+from django.db import InterfaceError, OperationalError, transaction
 from devices.models import Device, DeviceStatusCollection
+from services.mqtt_inbound import extract_message_id, topic_matches_binding
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,21 @@ def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
         if not device:
             return False  # _get_device 已记录日志
 
+        if not topic_matches_binding(topic, device.mqtt_topic_data):
+            logger.error(
+                "✗ 设备状态 topic 与资源绑定不一致: device=%s expected=%s actual=%s",
+                device_id,
+                device.mqtt_topic_data,
+                topic,
+            )
+            return False
+
+        try:
+            message_id = extract_message_id(payload)
+        except ValueError as exc:
+            logger.error("✗ MQTT 消息幂等键无效: %s", exc)
+            return False
+
         event_name = payload['event']
         status_to_save = _extract_status_fields(payload)
         if not status_to_save:
@@ -44,7 +60,13 @@ def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
             return False
 
         timestamp = _convert_timestamp(payload['timestamp'])
-        success = _save_device_status(device, status_to_save, event_name, timestamp)
+        success = _save_device_status(
+            device,
+            status_to_save,
+            event_name,
+            timestamp,
+            message_id,
+        )
 
         if success:
             logger.info(f"✓ 设备状态保存成功 - {device_id}, event={event_name}, 状态: {status_to_save}")
@@ -54,6 +76,8 @@ def handle_mqtt_device_status_message(topic: str, payload: Dict) -> bool:
                 )
         return success
 
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.exception(f"✗ 处理MQTT设备状态消息时发生异常: {e}")
         return False
@@ -83,6 +107,8 @@ def _get_device(device_id: str) -> Optional[Device]:
     except Device.DoesNotExist:
         logger.warning(f"⚠ 设备不存在: {device_id}")
         return None
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.error(f"✗ 查询设备失败: {device_id}, 错误: {e}")
         return None
@@ -107,15 +133,52 @@ def _convert_timestamp(ts) -> datetime:
         return django_tz.now()
 
 
-def _save_device_status(device: Device, status_data: Dict, event_name: str, timestamp: datetime) -> bool:
+def _save_device_status(
+    device: Device,
+    status_data: Dict,
+    event_name: str,
+    timestamp: datetime,
+    message_id: Optional[str] = None,
+) -> bool:
     try:
-        DeviceStatusCollection.objects.create(
-            device=device,
-            data=status_data,
-            event_name=event_name,
-            timestamp=timestamp,
-        )
+        if message_id:
+            _record, created = DeviceStatusCollection.objects.get_or_create(
+                device=device,
+                message_id=message_id,
+                defaults={
+                    "data": status_data,
+                    "event_name": event_name,
+                    "timestamp": timestamp,
+                },
+            )
+            if not created:
+                if (
+                    _record.data != status_data
+                    or _record.timestamp != timestamp
+                    or _record.event_name != event_name
+                ):
+                    logger.error(
+                        "✗ 设备状态 message_id 冲突 - 设备: %s, "
+                        "message_id: %s",
+                        device.device_id,
+                        message_id,
+                    )
+                    return False
+                logger.info(
+                    "✓ 跳过重复设备状态 - 设备: %s, message_id: %s",
+                    device.device_id,
+                    message_id,
+                )
+        else:
+            DeviceStatusCollection.objects.create(
+                device=device,
+                data=status_data,
+                event_name=event_name,
+                timestamp=timestamp,
+            )
         return True
+    except (OperationalError, InterfaceError):
+        raise
     except Exception as e:
         logger.error(f"✗ 设备状态保存失败 - {device.device_id}, 错误: {e}", exc_info=True)
         return False
