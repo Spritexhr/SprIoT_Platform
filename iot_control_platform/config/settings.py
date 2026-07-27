@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 import math
 import os
+import sys
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 
@@ -115,23 +116,92 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-# Channels channel layer：跨 worker 广播必须用 Redis（InMemoryChannelLayer
-# 在 paho 后台线程 → consumer 异步线程跨线程场景下不稳定，开发期也强制 Redis）。
+# test/local/prod 必须使用不同 namespace，避免宿主机暴露的生产 Redis 被本地
+# manage.py 或测试误写。测试使用纯内存 layer，完全不访问 Redis。
+IS_TESTING = (
+    os.environ.get("DJANGO_TESTING", "").lower() in ("true", "1", "yes")
+    or "test" in sys.argv
+)
+_is_mysql_runtime = os.environ.get("DB_USE_MYSQL", "").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+_configured_runtime_env = os.environ.get("IOT_RUNTIME_ENV", "").strip().lower()
+if IS_TESTING:
+    IOT_RUNTIME_ENV = "test"
+elif _configured_runtime_env:
+    if _configured_runtime_env not in ("local", "production"):
+        raise ImproperlyConfigured(
+            "IOT_RUNTIME_ENV 必须是 local 或 production"
+        )
+    IOT_RUNTIME_ENV = _configured_runtime_env
+else:
+    # 兼容既有部署：未显式设置时，MySQL 仍按生产模式处理；新部署应明确设置，
+    # 避免“本地连接 MySQL”被误判为生产进程并共用 Redis namespace。
+    IOT_RUNTIME_ENV = "production" if _is_mysql_runtime else "local"
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [REDIS_URL],
-            "capacity": 1500,
-            "expiry": 30,
-        },
+if IS_TESTING:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+            "CONFIG": {
+                "capacity": 1500,
+                "expiry": 30,
+            },
+        }
     }
-}
+else:
+    _channel_prefix_default = (
+        "asgi" if IOT_RUNTIME_ENV == "production" else "spr_iot_local"
+    )
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [REDIS_URL],
+                "prefix": os.environ.get(
+                    "CHANNEL_LAYER_PREFIX",
+                    _channel_prefix_default,
+                ),
+                "capacity": 1500,
+                "expiry": 30,
+            },
+        }
+    }
+
+# 实时通知是可恢复的瞬时状态，使用有界、按资源合并的进程内发送缓冲区。
+REALTIME_DISPATCH_QUEUE_CAPACITY = int(
+    os.environ.get("REALTIME_DISPATCH_QUEUE_CAPACITY", "512")
+)
+REALTIME_DISPATCH_QUEUE_MAX_BYTES = int(
+    os.environ.get(
+        "REALTIME_DISPATCH_QUEUE_MAX_BYTES",
+        str(16 * 1024 * 1024),
+    )
+)
+if not 32 <= REALTIME_DISPATCH_QUEUE_CAPACITY <= 10000:
+    raise ImproperlyConfigured(
+        "REALTIME_DISPATCH_QUEUE_CAPACITY 必须在 32 到 10000 之间"
+    )
+if not 1024 * 1024 <= REALTIME_DISPATCH_QUEUE_MAX_BYTES <= 256 * 1024 * 1024:
+    raise ImproperlyConfigured(
+        "REALTIME_DISPATCH_QUEUE_MAX_BYTES 必须在 1048576 到 268435456 之间"
+    )
 
 # MQTT 跨进程命令总线（Redis Streams）。只有独立 mqtt_runner 持有
 # Paho client；ASGI worker 在 Redis 不可用时 fail closed，不回退为进程内直连。
-MQTT_BUS_PREFIX = os.environ.get("MQTT_BUS_PREFIX", "spr:iot:mqtt")
+if IS_TESTING:
+    _mqtt_bus_prefix_default = f"spr:iot:mqtt:test:{os.getpid()}"
+elif IOT_RUNTIME_ENV == "production":
+    _mqtt_bus_prefix_default = "spr:iot:mqtt"
+else:
+    _mqtt_bus_prefix_default = "spr:iot:mqtt:local"
+MQTT_BUS_PREFIX = (
+    _mqtt_bus_prefix_default
+    if IS_TESTING
+    else os.environ.get("MQTT_BUS_PREFIX", _mqtt_bus_prefix_default)
+)
 MQTT_COMMAND_BROKER_ACK_TIMEOUT = float(
     os.environ.get("MQTT_COMMAND_BROKER_ACK_TIMEOUT", "2")
 )
@@ -178,6 +248,16 @@ MQTT_BUS_REDIS_SOCKET_TIMEOUT = float(
 # 通过环境变量切换：未设置 DB_USE_MYSQL 或为空时使用 SQLite
 
 if os.environ.get("DB_USE_MYSQL", "").lower() in ("true", "1", "yes"):
+    try:
+        _db_connect_timeout = int(os.environ.get("DB_CONNECT_TIMEOUT", "5"))
+    except (TypeError, ValueError) as _db_timeout_error:
+        raise ImproperlyConfigured(
+            "DB_CONNECT_TIMEOUT 必须是整数"
+        ) from _db_timeout_error
+    if not 1 <= _db_connect_timeout <= 30:
+        raise ImproperlyConfigured(
+            "DB_CONNECT_TIMEOUT 必须在 1 到 30 秒之间"
+        )
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
@@ -193,6 +273,7 @@ if os.environ.get("DB_USE_MYSQL", "").lower() in ("true", "1", "yes"):
             "OPTIONS": {
                 "charset": "utf8mb4",
                 "init_command": "SET sql_mode='STRICT_TRANS_TABLES', default_storage_engine=INNODB",
+                "connect_timeout": _db_connect_timeout,
             },
         }
     }
@@ -366,8 +447,8 @@ AUTOMATION_SCRIPT_EXECUTION_ENABLED = os.environ.get(
     "False",
 ).lower() in ("true", "1", "yes")
 
-# 自由脚本在独立 spawn 子进程中的单拍硬超时。配置错误直接阻止服务启动，
-# 不做静默纠正；上限避免一次脚本长期占住 scheduler / Web 请求。
+# 自由脚本在独立子进程中的单拍硬超时。配置错误直接阻止服务启动，不做静默
+# 纠正；上限避免一次脚本长期占住 scheduler / Web 请求。
 AUTOMATION_SCRIPT_TIMEOUT_MAX_SECONDS = 60.0
 _automation_timeout_raw = os.environ.get("AUTOMATION_SCRIPT_TIMEOUT_SECONDS", "10")
 try:
@@ -388,10 +469,34 @@ if (
 
 # 手动 API、Admin 与 scheduler 共享 Redis 单飞锁；同一规则只允许一个执行者。
 # Redis 不可用时执行器 fail closed，避免多 worker 重复运行自由 Python 脚本。
-AUTOMATION_SCRIPT_LOCK_PREFIX = os.environ.get(
-    "AUTOMATION_SCRIPT_LOCK_PREFIX",
-    "spr:iot:automation:execution",
+_automation_lock_prefix_default = (
+    f"spr:iot:automation:test:{os.getpid()}:execution"
+    if IOT_RUNTIME_ENV == "test"
+    else (
+        "spr:iot:automation:execution"
+        if IOT_RUNTIME_ENV == "production"
+        else "spr:iot:automation:local:execution"
+    )
 )
+AUTOMATION_SCRIPT_LOCK_PREFIX = (
+    _automation_lock_prefix_default
+    if IS_TESTING
+    else os.environ.get(
+        "AUTOMATION_SCRIPT_LOCK_PREFIX",
+        _automation_lock_prefix_default,
+    )
+)
+
+# 执行进程启动方式：auto 在支持的平台使用预加载 Django 的 forkserver，否则
+# 回退 spawn。线上出现兼容问题时可设为 spawn 一键回滚，不改变脚本隔离语义。
+AUTOMATION_EXECUTOR_START_METHOD = os.environ.get(
+    "AUTOMATION_EXECUTOR_START_METHOD",
+    "auto",
+).strip().lower()
+if AUTOMATION_EXECUTOR_START_METHOD not in ("auto", "forkserver", "spawn"):
+    raise ImproperlyConfigured(
+        "AUTOMATION_EXECUTOR_START_METHOD 必须是 auto、forkserver 或 spawn"
+    )
 
 # 自动化规则脚本允许导入的模块白名单。
 # 这只是开启脚本后的纵深防御，不是 Python 安全沙箱，不能替代进程/容器隔离。

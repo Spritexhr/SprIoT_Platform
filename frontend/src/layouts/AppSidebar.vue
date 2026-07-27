@@ -271,12 +271,21 @@ const activeMenu = computed(() => {
   font-size: 18px;
 }
 
-.app-sidebar__menu :deep(.el-menu--collapse .el-menu-item) {
+.app-sidebar__menu.el-menu--collapse {
+  width: 100%;
+}
+
+.app-sidebar__menu.el-menu--collapse :deep(.el-menu-item) {
   padding: 0 !important;
   justify-content: center;
 }
 
-.app-sidebar__menu :deep(.el-menu--collapse .el-menu-item .el-icon) {
+.app-sidebar__menu.el-menu--collapse :deep(.el-menu-tooltip__trigger) {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-sidebar__menu.el-menu--collapse :deep(.el-menu-item .el-icon) {
   margin-right: 0;
 }
 

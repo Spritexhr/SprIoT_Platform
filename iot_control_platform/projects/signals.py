@@ -11,16 +11,98 @@ devices.all 后按成员过滤转发），与 eb_plant 一致。
 import logging
 
 from django.db import transaction
-from django.db.models.signals import post_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
 from sensors.models import SensorData
 from services.realtime import dispatch
 from services.realtime.latest_values import build_point_sample
 
-from .models import ProjectSensorMember
+from .models import ProjectDeviceMember, ProjectSensorMember
+from .realtime import publish_project_membership_changed
 
 logger = logging.getLogger(__name__)
+
+
+def _schedule_membership_refresh(project_ids):
+    """事务提交后通知受影响项目；实时层故障不能反向导致成员写接口失败。"""
+    project_ids = tuple(sorted({project_id for project_id in project_ids if project_id}))
+    if not project_ids:
+        return
+
+    def _publish():
+        for project_id in project_ids:
+            try:
+                publish_project_membership_changed(project_id)
+            except Exception as exc:
+                logger.warning(
+                    "projects 成员变化广播失败 project_id=%s err=%s",
+                    project_id,
+                    exc,
+                )
+
+    transaction.on_commit(_publish)
+
+
+def _remember_previous_project(sender, instance):
+    """成员被移动到另一项目时，旧项目也必须刷新已有连接。"""
+    previous_project_id = None
+    if instance.pk:
+        previous_project_id = (
+            sender.objects.filter(pk=instance.pk)
+            .values_list("project_id", flat=True)
+            .first()
+        )
+    instance._realtime_previous_project_id = previous_project_id
+
+
+@receiver(
+    pre_save,
+    sender=ProjectSensorMember,
+    dispatch_uid="projects_remember_sensor_member_project",
+)
+@receiver(
+    pre_save,
+    sender=ProjectDeviceMember,
+    dispatch_uid="projects_remember_device_member_project",
+)
+def on_project_member_pre_save(sender, instance, **kwargs):
+    _remember_previous_project(sender, instance)
+
+
+@receiver(
+    post_save,
+    sender=ProjectSensorMember,
+    dispatch_uid="projects_refresh_sensor_membership",
+)
+@receiver(
+    post_save,
+    sender=ProjectDeviceMember,
+    dispatch_uid="projects_refresh_device_membership",
+)
+def on_project_member_saved(sender, instance, **kwargs):
+    if getattr(instance, "_skip_realtime_membership_refresh", False):
+        return
+    _schedule_membership_refresh(
+        {
+            instance.project_id,
+            getattr(instance, "_realtime_previous_project_id", None),
+        }
+    )
+
+
+@receiver(
+    post_delete,
+    sender=ProjectSensorMember,
+    dispatch_uid="projects_refresh_deleted_sensor_membership",
+)
+@receiver(
+    post_delete,
+    sender=ProjectDeviceMember,
+    dispatch_uid="projects_refresh_deleted_device_membership",
+)
+def on_project_member_deleted(sender, instance, **kwargs):
+    _schedule_membership_refresh({instance.project_id})
 
 
 @receiver(post_save, sender=SensorData, dispatch_uid="projects_ingest_sensor_data")

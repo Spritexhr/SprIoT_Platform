@@ -7,6 +7,10 @@ import sys
 def main():
     """Run administrative tasks."""
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    # argv 会在自动化 spawn/forkserver 子进程中被重写；使用可继承环境标记，确保
+    # 测试子进程继续使用 InMemoryChannelLayer 和隔离的 MQTT namespace。
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        os.environ["DJANGO_TESTING"] = "1"
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

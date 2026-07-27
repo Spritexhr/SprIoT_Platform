@@ -8,9 +8,43 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
+
+from .auth_serializers import (
+    ChangePasswordInputSerializer,
+    RegisterInputSerializer,
+    UserProfileInputSerializer,
+)
+
+
+User = get_user_model()
+
+
+def _input_error_response(errors):
+    """保持原认证 API 的 ``{"detail": "..."}`` 错误响应契约。"""
+
+    def first_message(value):
+        if isinstance(value, dict):
+            for nested in value.values():
+                message = first_message(nested)
+                if message:
+                    return message
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                message = first_message(nested)
+                if message:
+                    return message
+        elif value:
+            return str(value)
+        return "请求参数无效"
+
+    return Response(
+        {"detail": first_message(errors)},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 @api_view(['POST'])
@@ -20,53 +54,27 @@ def register(request):
     用户注册
     请求体: { "username": "", "password": "", "password2": "", "email": "" }
     """
-    username = request.data.get('username', '').strip()
-    password = request.data.get('password', '')
-    password2 = request.data.get('password2', '')
-    email = request.data.get('email', '').strip()
+    serializer = RegisterInputSerializer(data=request.data)
+    if not serializer.is_valid():
+        return _input_error_response(serializer.errors)
+    data = serializer.validated_data
 
-    # 参数校验
-    if not username or not password:
-        return Response(
-            {'detail': '用户名和密码不能为空'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if password != password2:
-        return Response(
-            {'detail': '两次输入的密码不一致'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if User.objects.filter(username=username).exists():
-        return Response(
-            {'detail': '该用户名已被注册'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if email and User.objects.filter(email=email).exists():
-        return Response(
-            {'detail': '该邮箱已被注册'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    # 密码强度校验
+    # exists() 只提供友好的提前提示；数据库唯一约束才是并发注册时的最终防线。
+    # IntegrityError 必须在 atomic 块外捕获，否则当前事务会保持 broken 状态。
     try:
-        validate_password(password)
-    except ValidationError as e:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=data["username"],
+                password=data["password"],
+                email=data.get("email", ""),
+                is_staff=False,
+                is_superuser=False,
+            )
+    except IntegrityError:
         return Response(
-            {'detail': e.messages[0]},
+            {"detail": "该用户名已被注册"},
             status=status.HTTP_400_BAD_REQUEST,
         )
-
-    # 创建用户（注册仅能创建非工作人员，is_staff/is_superuser 必须为 False）
-    user = User.objects.create_user(
-        username=username,
-        password=password,
-        email=email,
-        is_staff=False,
-        is_superuser=False,
-    )
 
     return Response(
         {
@@ -103,22 +111,16 @@ def user_profile(request):
             'is_superuser': user.is_superuser,
         })
 
-    # PUT 更新
-    email = request.data.get('email', user.email).strip()
-    first_name = request.data.get('first_name', user.first_name).strip()
-    last_name = request.data.get('last_name', user.last_name).strip()
-
-    # 检查邮箱是否被其他人占用
-    if email and User.objects.filter(email=email).exclude(pk=user.pk).exists():
-        return Response(
-            {'detail': '该邮箱已被其他用户使用'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    user.email = email
-    user.first_name = first_name
-    user.last_name = last_name
-    user.save()
+    # PUT 保持历史兼容：允许只提交需要修改的字段，未提交字段维持原值。
+    serializer = UserProfileInputSerializer(
+        user,
+        data=request.data,
+        partial=True,
+        context={"user": user},
+    )
+    if not serializer.is_valid():
+        return _input_error_response(serializer.errors)
+    user = serializer.save()
 
     return Response({
         'detail': '更新成功',
@@ -140,9 +142,13 @@ def change_password(request):
     请求体: { "old_password": "", "new_password": "", "new_password2": "" }
     """
     user = request.user
-    old_password = request.data.get('old_password', '')
-    new_password = request.data.get('new_password', '')
-    new_password2 = request.data.get('new_password2', '')
+    serializer = ChangePasswordInputSerializer(data=request.data)
+    if not serializer.is_valid():
+        return _input_error_response(serializer.errors)
+    data = serializer.validated_data
+    old_password = data["old_password"]
+    new_password = data["new_password"]
+    new_password2 = data["new_password2"]
 
     if not user.check_password(old_password):
         return Response(

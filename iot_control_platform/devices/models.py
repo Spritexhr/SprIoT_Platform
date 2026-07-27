@@ -342,6 +342,14 @@ class DeviceStatusCollection(models.Model):
         help_text="状态记录的时间戳"
     )
 
+    message_id = models.CharField(
+        max_length=128,
+        null=True,
+        blank=True,
+        verbose_name="MQTT 消息幂等 ID",
+        help_text="设备可选上报；同一设备内用于去重 QoS 重投消息",
+    )
+
     received_at = models.DateTimeField(
         auto_now_add=True,
         db_index=True,
@@ -358,6 +366,12 @@ class DeviceStatusCollection(models.Model):
             models.Index(
                 fields=['device', '-received_at'],
                 name='device_recv_latest_idx',
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['device', 'message_id'],
+                name='uniq_device_status_msg',
             ),
         ]
 

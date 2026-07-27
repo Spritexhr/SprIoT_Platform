@@ -39,6 +39,10 @@ class MqttCommandBusUnavailable(MqttCommandBusError):
     """Redis is unavailable; callers must fail closed and not publish MQTT."""
 
 
+class MqttCommandQueueFull(MqttCommandBusError):
+    """The durable command stream reached its configured backlog limit."""
+
+
 TERMINAL_STATES = frozenset({
     "broker_acked",
     "device_acked",
@@ -50,6 +54,29 @@ TERMINAL_STATES = frozenset({
     "rejected",
     "reload_applied",
     "reload_failed",
+})
+
+# 设备回传的 check_code 是比本地超时判断更强的事实证据。以下状态只表示
+# “当时无法确认交付/设备确认”，允许后到的真实设备 ACK 将其升级。
+DEVICE_ACK_SUPERSEDABLE_STATES = frozenset({
+    "broker_timeout",  # 兼容修复前把 PUBACK 超时记成 broker_timeout 的历史请求
+    "device_ack_timeout",
+    "delivery_unknown",
+})
+
+DELIVERY_UNKNOWN_PUBLISH_ERRORS = frozenset({
+    "puback_timeout",
+    "puback_wait_exception",
+    "publish_call_exception",
+    # Paho 在 connected 检查与 publish() 之间断线时返回 MQTT_ERR_NO_CONN(4)；
+    # QoS 1 消息可能已经进入客户端重发队列，不能断言 broker 未收到。
+    "publish_rc_4",
+})
+
+REJECTED_PUBLISH_ERRORS = frozenset({
+    "invalid_message",
+    # Paho outgoing queue 已满时，本条消息没有进入 _out_messages。
+    "publish_rc_15",
 })
 
 MIN_COMMAND_TIMEOUT_SECONDS = 0.1
@@ -99,6 +126,10 @@ class MqttCommandBus:
         self.dead_letter_stream = f"{self.prefix}:inbound-deadletter:v1"
         self.result_ttl = int(getattr(settings, "MQTT_COMMAND_RESULT_TTL", 600))
         self.check_code_ttl = int(getattr(settings, "MQTT_CHECK_CODE_TTL", 120))
+        self.command_stream_max_backlog = max(
+            1,
+            int(getattr(settings, "MQTT_COMMAND_STREAM_MAX_BACKLOG", 10_000)),
+        )
         self.dead_letter_maxlen = max(
             1, int(getattr(settings, "MQTT_DEAD_LETTER_MAXLEN", 10_000))
         )
@@ -224,6 +255,18 @@ class MqttCommandBus:
             name="execute_within",
             maximum=MAX_COMMAND_EXECUTE_WITHIN_SECONDS,
         )
+
+        # 命令处理完成后会 XDEL，因此 XLEN 就是当前持久化积压量。这里是
+        # 软上限：极端并发生产者可能小幅越界，但不会在 runner 离线时无界增长。
+        backlog = int(
+            self._redis_call(self.client.xlen, self.command_stream) or 0
+        )
+        if backlog >= self.command_stream_max_backlog:
+            raise MqttCommandQueueFull(
+                "MQTT 命令队列已满 "
+                f"({backlog}/{self.command_stream_max_backlog})"
+            )
+
         execute_before = created_at + int(max(1.0, execute_within) * 1000)
         confirmation = "device" if require_device_ack else "none"
 
@@ -344,12 +387,16 @@ class MqttCommandBus:
         status: str,
         *,
         error: str = "",
+        replace_terminal_states: Iterable[str] = (),
     ) -> Dict[str, str]:
         """Set a terminal result unless another terminal result already won.
 
         WATCH makes the device-ACK-vs-timeout race deterministic without a
-        server-side dependency or custom Redis module.
+        server-side dependency or custom Redis module.  A caller may explicitly
+        name inconclusive terminal states that stronger evidence can replace;
+        ordinary callers preserve the original first-terminal-result-wins rule.
         """
+        replace_terminal_states = frozenset(replace_terminal_states)
         key = self._request_key(request_id)
         while True:
             pipe = self.client.pipeline()
@@ -358,7 +405,10 @@ class MqttCommandBus:
                 current = pipe.hget(key, "status")
                 if isinstance(current, bytes):
                     current = current.decode("utf-8")
-                if current in TERMINAL_STATES:
+                if (
+                    current in TERMINAL_STATES
+                    and current not in replace_terminal_states
+                ):
                     pipe.unwatch()
                     return self.get_request(request_id)
                 pipe.multi()
@@ -488,7 +538,21 @@ class MqttCommandBus:
         request_id = mapping.get("request_id")
         if not request_id:
             return False
-        self.complete_if_pending(request_id, "device_acked")
+        result = self.complete_if_pending(
+            request_id,
+            "device_acked",
+            replace_terminal_states=DEVICE_ACK_SUPERSEDABLE_STATES,
+        )
+        if result.get("status") != "device_acked":
+            # 映射可能暂时无法升级（例如请求已明确 rejected）。保留到 TTL，
+            # 避免一次竞态回调永久吃掉后续可用于诊断/重试的真实设备 ACK。
+            logger.warning(
+                "check_code 未能升级请求状态 code=%s request_id=%s status=%s",
+                check_code,
+                request_id,
+                result.get("status", "missing"),
+            )
+            return False
         self._redis_call(self.client.delete, self._check_key(check_code))
         return True
 
@@ -734,6 +798,72 @@ class MqttCommandWorker(threading.Thread):
         self.stop_event = stop_event
         self.consumer = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
+    @staticmethod
+    def _publish_failure_status(error: str) -> str:
+        if error == "not_connected":
+            return "broker_unavailable"
+        if error in REJECTED_PUBLISH_ERRORS:
+            return "rejected"
+        if error in DELIVERY_UNKNOWN_PUBLISH_ERRORS:
+            return "delivery_unknown"
+        return "broker_timeout"
+
+    def _await_device_confirmation(
+        self,
+        request_id: str,
+        *,
+        timeout_seconds: float,
+        broker_delivery: str,
+        broker_error: str = "",
+        wait_started_at_ms: Optional[int] = None,
+    ) -> Optional[Dict[str, str]]:
+        """等待真实设备 ACK，并保留 broker 交付是否确定的语义。
+
+        ``None`` 表示 runner 正在停止，stream entry 必须保持 pending 供下个
+        runner 恢复。设备 ACK 可以与状态迁移、超时判定并发；Redis WATCH 保证
+        更强的 ``device_acked`` 事实不会被本地超时覆盖。
+        """
+        started_at_ms = int(wait_started_at_ms or _now_ms())
+        extra = {
+            "broker_delivery": broker_delivery,
+            "broker_error": broker_error,
+            "device_ack_wait_started_at_ms": started_at_ms,
+        }
+        if broker_delivery == "acked":
+            # 保留旧字段，兼容已经运行中的 runner 所留下的 awaiting 状态。
+            extra["broker_acked_at_ms"] = started_at_ms
+        result = self.bus.transition_if_pending(
+            request_id,
+            "awaiting_device_ack",
+            extra=extra,
+        )
+        if result.get("status") != "device_acked":
+            elapsed = max(0.0, (_now_ms() - started_at_ms) / 1000.0)
+            result = self.bus.wait_result(
+                request_id,
+                timeout=max(0.01, timeout_seconds - elapsed),
+                stop_event=self.stop_event,
+            )
+        if self.stop_event.is_set():
+            return None
+        if result.get("status") == "device_acked":
+            return result
+
+        if broker_delivery == "unknown":
+            error = "MQTT 交付结果不确定，且设备未在期限内确认"
+            if broker_error:
+                error = f"{error}: {broker_error}"
+            return self.bus.complete_if_pending(
+                request_id,
+                "delivery_unknown",
+                error=error,
+            )
+        return self.bus.complete_if_pending(
+            request_id,
+            "device_ack_timeout",
+            error="broker 已接收命令，但设备未在期限内确认",
+        )
+
     def run(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -785,11 +915,36 @@ class MqttCommandWorker(threading.Thread):
             self.bus.ack_command(message_id)
             return
         if recovered and status == "publishing":
-            self.bus.complete_if_pending(
+            if fields.get("confirmation") != "device":
+                self.bus.complete_if_pending(
+                    request_id,
+                    "delivery_unknown",
+                    error="runner 在 MQTT publish 临界区退出，未自动重发非幂等命令",
+                )
+                self.bus.ack_command(message_id)
+                return
+            try:
+                timeout_seconds = validate_command_timeout(
+                    int(fields.get("device_ack_timeout_ms") or 3000) / 1000.0,
+                    name="device_ack_timeout",
+                    maximum=MAX_DEVICE_ACK_TIMEOUT_SECONDS,
+                )
+            except (TypeError, ValueError):
+                self.bus.complete_if_pending(
+                    request_id,
+                    "rejected",
+                    error="非法 device_ack_timeout",
+                )
+                self.bus.ack_command(message_id)
+                return
+            result = self._await_device_confirmation(
                 request_id,
-                "delivery_unknown",
-                error="runner 在 MQTT publish 临界区退出，未自动重发非幂等命令",
+                timeout_seconds=timeout_seconds,
+                broker_delivery="unknown",
+                broker_error="runner 在 MQTT publish 临界区退出",
             )
+            if result is None:
+                return
             self.bus.ack_command(message_id)
             return
         if recovered and status == "awaiting_device_ack":
@@ -799,8 +954,11 @@ class MqttCommandWorker(threading.Thread):
                     name="device_ack_timeout",
                     maximum=MAX_DEVICE_ACK_TIMEOUT_SECONDS,
                 )
-                timeout_ms = int(timeout_seconds * 1000)
-                broker_acked_at = int(state.get("broker_acked_at_ms") or _now_ms())
+                wait_started_at_ms = int(
+                    state.get("device_ack_wait_started_at_ms")
+                    or state.get("broker_acked_at_ms")
+                    or _now_ms()
+                )
             except (TypeError, ValueError):
                 self.bus.complete_if_pending(
                     request_id,
@@ -809,20 +967,15 @@ class MqttCommandWorker(threading.Thread):
                 )
                 self.bus.ack_command(message_id)
                 return
-            remaining = max(0.01, (broker_acked_at + timeout_ms - _now_ms()) / 1000.0)
-            result = self.bus.wait_result(
+            result = self._await_device_confirmation(
                 request_id,
-                timeout=remaining,
-                stop_event=self.stop_event,
+                timeout_seconds=timeout_seconds,
+                broker_delivery=state.get("broker_delivery") or "acked",
+                broker_error=state.get("broker_error", ""),
+                wait_started_at_ms=wait_started_at_ms,
             )
-            if self.stop_event.is_set():
+            if result is None:
                 return
-            if result.get("status") != "device_acked":
-                self.bus.complete_if_pending(
-                    request_id,
-                    "device_ack_timeout",
-                    error="broker 已接收命令，但设备未在期限内确认",
-                )
             self.bus.ack_command(message_id)
             return
 
@@ -859,9 +1012,21 @@ class MqttCommandWorker(threading.Thread):
                 timeout=broker_timeout,
             )
             if not published:
-                terminal_status = (
-                    "broker_unavailable" if error == "not_connected" else "broker_timeout"
-                )
+                terminal_status = self._publish_failure_status(error)
+                if (
+                    fields.get("confirmation") == "device"
+                    and terminal_status == "delivery_unknown"
+                ):
+                    result = self._await_device_confirmation(
+                        request_id,
+                        timeout_seconds=device_timeout,
+                        broker_delivery="unknown",
+                        broker_error=error,
+                    )
+                    if result is None:
+                        return
+                    self.bus.ack_command(message_id)
+                    return
                 self.bus.complete_if_pending(request_id, terminal_status, error=error)
                 self.bus.ack_command(message_id)
                 return
@@ -871,25 +1036,13 @@ class MqttCommandWorker(threading.Thread):
                 self.bus.ack_command(message_id)
                 return
 
-            result = self.bus.transition_if_pending(
+            result = self._await_device_confirmation(
                 request_id,
-                "awaiting_device_ack",
-                extra={"broker_acked_at_ms": _now_ms()},
+                timeout_seconds=device_timeout,
+                broker_delivery="acked",
             )
-            if result.get("status") != "device_acked":
-                result = self.bus.wait_result(
-                    request_id,
-                    timeout=device_timeout,
-                    stop_event=self.stop_event,
-                )
-            if self.stop_event.is_set():
+            if result is None:
                 return
-            if result.get("status") != "device_acked":
-                self.bus.complete_if_pending(
-                    request_id,
-                    "device_ack_timeout",
-                    error="broker 已接收命令，但设备未在期限内确认",
-                )
             self.bus.ack_command(message_id)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             self.bus.complete_if_pending(request_id, "rejected", error=str(exc))

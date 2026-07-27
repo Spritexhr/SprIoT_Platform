@@ -30,6 +30,11 @@ _TYPE_NAMES = {
     dict: "object",
 }
 
+# 清理 API 每次最多处理 1000 条主记录，每个 DELETE 最多 250 条。这样即使历史
+# 表很大，单个 Gunicorn 请求也有明确上限；前端根据 has_more 自动继续下一批。
+API_CLEANUP_BATCH_SIZE = 250
+API_CLEANUP_MAX_RECORDS = 1000
+
 
 def _infer_type(item: dict) -> str:
     """从 defaults.py 条目推断前端展示用的类型字符串"""
@@ -230,10 +235,24 @@ class PlatformConfigViewSet(viewsets.ModelViewSet):
         try:
             from django.core.management import call_command
             from io import StringIO
+            from .management.commands.cleanup_old_data import (
+                CleanupAlreadyRunning,
+                Command as CleanupCommand,
+            )
 
             out = StringIO()
-            call_command("cleanup_old_data", dry_run=dry_run, stdout=out)
+            command = CleanupCommand()
+            call_command(
+                command,
+                dry_run=dry_run,
+                batch_size=API_CLEANUP_BATCH_SIZE,
+                max_records=(
+                    None if dry_run else API_CLEANUP_MAX_RECORDS
+                ),
+                stdout=out,
+            )
             output = out.getvalue().strip()
+            result = command.cleanup_result
             mode = "试运行" if dry_run else "真实删除"
             logger.info(f"API 触发 cleanup_old_data（{mode}）: {output}")
             return Response(
@@ -241,12 +260,23 @@ class PlatformConfigViewSet(viewsets.ModelViewSet):
                     "message": (
                         "cleanup preview completed"
                         if dry_run
-                        else "cleanup completed"
+                        else (
+                            "cleanup partially completed"
+                            if result["has_more"]
+                            else "cleanup completed"
+                        )
                     ),
                     "dry_run": dry_run,
                     "output": output,
+                    **result,
                 },
                 status=status.HTTP_200_OK,
+            )
+        except CleanupAlreadyRunning as e:
+            logger.warning("拒绝并发历史数据清理请求: %s", e)
+            return Response(
+                {"detail": str(e), "code": "cleanup_already_running"},
+                status=status.HTTP_409_CONFLICT,
             )
         except Exception as e:
             logger.exception("cleanup_old_data 执行失败")

@@ -16,8 +16,13 @@ from urllib.parse import parse_qsl, urlencode
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
 from django.contrib.auth.models import AnonymousUser
+from django.db import InterfaceError, OperationalError
 
 log = logging.getLogger(__name__)
+
+
+class AuthenticationDependencyUnavailable(RuntimeError):
+    """JWT 本身未判定无效，但用户数据库暂时不可用。"""
 
 
 @database_sync_to_async
@@ -26,15 +31,15 @@ def _authenticate(token: str):
     if not token:
         return AnonymousUser()
     try:
-        from django.contrib.auth import get_user_model
+        from rest_framework_simplejwt.authentication import JWTAuthentication
         from rest_framework_simplejwt.tokens import AccessToken
 
         payload = AccessToken(token)
-        user_id = payload.get("user_id")
-        if user_id is None:
-            return AnonymousUser()
-        User = get_user_model()
-        return User.objects.get(pk=user_id)
+        # 复用 SimpleJWT 的 HTTP 鉴权路径，确保 inactive 用户、用户不存在以及
+        # 可选的密码撤销校验在 REST / WebSocket 两侧保持完全一致。
+        return JWTAuthentication().get_user(payload)
+    except (OperationalError, InterfaceError) as exc:
+        raise AuthenticationDependencyUnavailable from exc
     except Exception as exc:
         log.debug("[ws-auth] token 校验失败: %s", exc)
         return AnonymousUser()
@@ -58,5 +63,11 @@ class JwtAuthMiddleware(BaseMiddleware):
         # scope 生成 "WebSocket <path>?<query>" 日志。必须在调用 BaseMiddleware
         # （它会复制 scope）之前就地清除凭据，同时保留其它非敏感查询参数。
         scope["query_string"] = urlencode(safe_pairs, doseq=True).encode("utf-8")
-        scope["user"] = await _authenticate(token)
+        try:
+            scope["user"] = await _authenticate(token)
+        except AuthenticationDependencyUnavailable as exc:
+            # 依赖故障不是“token 无效”，不能让前端误删登录态或盲目 refresh。
+            log.warning("[ws-auth] 用户数据库暂时不可用: %s", exc)
+            scope["user"] = AnonymousUser()
+            scope["auth_dependency_unavailable"] = True
         return await super().__call__(scope, receive, send)

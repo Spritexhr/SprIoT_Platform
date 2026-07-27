@@ -33,6 +33,9 @@ export function reloadPlatformConfig() {
 /**
  * 预览或执行历史数据清理（仅管理员）。
  * 默认始终为试运行，实际删除还需由调用方明确传入 dry_run: false 和确认令牌。
+ * 删除响应包含 deleted_count、remaining_count 和 has_more；为避免反复全表
+ * COUNT，has_more=true 时 remaining_count 为 null。调用方应继续请求下一批，
+ * 单个后端请求始终保持有界。
  */
 export function runCleanupOldData(payload = {}) {
   return request.post('/platform-configs/cleanup-old-data/', {

@@ -98,6 +98,16 @@ def on_device_status(sender, instance: DeviceStatusCollection, created: bool, **
 @receiver(post_save, sender=AutomationRule, dispatch_uid="rt_automation_rule")
 def on_automation_rule(sender, instance: AutomationRule, created: bool, **kwargs):
     """规则增/改都广播——前端按 id 找到本地对象 patch 字段。"""
+    update_fields = kwargs.get("update_fields")
+    if (
+        not created
+        and update_fields is not None
+        and set(update_fields).issubset({"last_run_time"})
+    ):
+        # 高频调度每拍都会写入 last_run_time；列表与项目工作区不展示该字段，
+        # 无需为此同步阻塞调度线程并发送一份完整规则状态。
+        return
+
     payload = {
         "id": instance.id,
         "name": instance.name,

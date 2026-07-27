@@ -9,6 +9,7 @@ M2 起会在此追加 SensorListConsumer / SensorStreamConsumer 等。
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import List
 
@@ -18,6 +19,9 @@ from .dispatch import g_device_one, g_sensor_one
 
 log = logging.getLogger(__name__)
 
+CHANNEL_OPERATION_TIMEOUT_SECONDS = 2.0
+INITIAL_SNAPSHOT_TIMEOUT_SECONDS = 10.0
+
 
 class _BaseAuthedConsumer(AsyncJsonWebsocketConsumer):
     """所有 consumer 公共：未登录直接 4001 close；统一 group_add / discard。"""
@@ -25,21 +29,54 @@ class _BaseAuthedConsumer(AsyncJsonWebsocketConsumer):
     groups_to_join: List[str] = []
 
     async def connect(self):
+        self._joined_groups: List[str] = []
+        if self.scope.get("auth_dependency_unavailable"):
+            await self.close(code=1013)
+            return
         user = self.scope.get("user")
         if user is None or not getattr(user, "is_authenticated", False):
             await self.close(code=4001)
             return
-        for group in self._compute_groups():
-            await self.channel_layer.group_add(group, self.channel_name)
+
+        try:
+            for group in self._compute_groups():
+                await asyncio.wait_for(
+                    self.channel_layer.group_add(group, self.channel_name),
+                    timeout=CHANNEL_OPERATION_TIMEOUT_SECONDS,
+                )
+                self._joined_groups.append(group)
+        except Exception as exc:
+            # Redis / channel layer 短暂不可用时，用标准 1013 告知客户端稍后
+            # 重试，避免 ASGI 异常直接冒泡形成无提示的 1006 断线。
+            log.warning("[ws] 订阅 group 失败，暂时拒绝连接: %s", exc)
+            await self.close(code=1013)
+            await self._discard_joined_groups()
+            return
+
         await self.accept()
-        await self._send_initial()
+        try:
+            await asyncio.wait_for(
+                self._send_initial(),
+                timeout=INITIAL_SNAPSHOT_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            log.warning("[ws] 发送初始快照失败，关闭连接: %s", exc)
+            await self.close(code=1013)
+            await self._discard_joined_groups()
 
     async def disconnect(self, code):
-        for group in self._compute_groups():
+        await self._discard_joined_groups()
+
+    async def _discard_joined_groups(self):
+        for group in getattr(self, "_joined_groups", ()):
             try:
-                await self.channel_layer.group_discard(group, self.channel_name)
+                await asyncio.wait_for(
+                    self.channel_layer.group_discard(group, self.channel_name),
+                    timeout=CHANNEL_OPERATION_TIMEOUT_SECONDS,
+                )
             except Exception:
                 pass
+        self._joined_groups = []
 
     def _compute_groups(self) -> List[str]:
         """子类可覆盖。默认返回 groups_to_join。"""

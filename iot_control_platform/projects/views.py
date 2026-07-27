@@ -20,6 +20,7 @@ import logging
 from collections import defaultdict
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db.models import Count, IntegerField, OuterRef, Subquery, Value
@@ -42,6 +43,7 @@ from .models import (
     ProjectSensorMember,
     ProjectView,
 )
+from .realtime import publish_project_membership_changed
 from .serializers import (
     BindableDeviceSerializer,
     BindableSensorSerializer,
@@ -556,6 +558,12 @@ class ProjectSensorMemberViewSet(_ControlSchemeProtectedDestroyMixin, _ProjectSc
                     ))
 
             ProjectSensorMember.objects.bulk_create(to_create, ignore_conflicts=True)
+            if to_create:
+                # bulk_create 不触发 model signal；显式发一次即可，避免按成员广播。
+                transaction.on_commit(
+                    lambda project_id=section.project_id:
+                    publish_project_membership_changed(project_id)
+                )
             created_keys = {(b.sensor_id, b.data_key) for b in to_create}
             if created_keys:
                 created_qs = ProjectSensorMember.objects.filter(
@@ -586,13 +594,26 @@ class ProjectDeviceMemberViewSet(_ControlSchemeProtectedDestroyMixin, _ProjectSc
                 .values_list("device_id", flat=True)
             )
             created = []
-            for d in Device.objects.filter(id__in=device_ids):
-                if d.id in existing:
-                    continue
-                b = ProjectDeviceMember.objects.create(
-                    project_id=section.project_id, section_id=section.id, device=d, tag=d.device_id,
-                )
-                created.append(b)
+            with transaction.atomic():
+                for d in Device.objects.filter(id__in=device_ids):
+                    if d.id in existing:
+                        continue
+                    b = ProjectDeviceMember(
+                        project_id=section.project_id,
+                        section_id=section.id,
+                        device=d,
+                        tag=d.device_id,
+                    )
+                    # 批量导入只在全部写入成功后通知一次，避免 N 个成员让每个
+                    # WebSocket 连接重复构建 N 次 snapshot。
+                    b._skip_realtime_membership_refresh = True
+                    b.save()
+                    created.append(b)
+                if created:
+                    transaction.on_commit(
+                        lambda project_id=section.project_id:
+                        publish_project_membership_changed(project_id)
+                    )
             data = ProjectDeviceMemberSerializer(created, many=True).data
             return Response({"created": data, "skipped": len(existing)}, status=status.HTTP_201_CREATED)
         return super().create(request, *args, **kwargs)

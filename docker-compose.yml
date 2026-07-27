@@ -45,6 +45,7 @@ services:
     container_name: iot-backend
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - IOT_RUNTIME_ENV=production
       - DB_USE_MYSQL=true
       - DB_NAME=${DB_NAME:-iot_platform}
       - DB_USER=${DB_USER:-root}
@@ -76,8 +77,8 @@ services:
     restart: unless-stopped
     healthcheck:
       # gunicorn 真正监听端口前，必须先跑完 migrate + configure --init，
-      # 用此 healthcheck 让 mqtt_runner 等到 platform_settings 配置写入后才启动
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8000), 2).close()"]
+      # 同时真实检查 MySQL/Redis；该端点不依赖 mqtt_runner，避免启动循环等待。
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/backend/', timeout=2).read()"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -90,6 +91,7 @@ services:
     container_name: iot-mqtt-runner
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - IOT_RUNTIME_ENV=production
       - DB_USE_MYSQL=true
       - DB_NAME=${DB_NAME:-iot_platform}
       - DB_USER=${DB_USER:-root}
@@ -140,6 +142,7 @@ services:
     container_name: iot-data-cleanup
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings
+      - IOT_RUNTIME_ENV=production
       - DB_USE_MYSQL=true
       - DB_NAME=${DB_NAME:-iot_platform}
       - DB_USER=${DB_USER:-root}

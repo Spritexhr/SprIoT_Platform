@@ -120,7 +120,13 @@ class Command(BaseCommand):
 
                 # connect_async 仅在本地配置/客户端创建异常时返回 False；broker
                 # 不可达由 Paho 自己无限退避。前者由主循环再次初始化。
-                if mqtt_service.client is None and now - last_connect_retry >= 5:
+                if (
+                    (
+                        mqtt_service.client is None
+                        or mqtt_service.publisher_client is None
+                    )
+                    and now - last_connect_retry >= 5
+                ):
                     last_connect_retry = now
                     mqtt_service.connect_async()
 

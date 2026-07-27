@@ -9,6 +9,7 @@ from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from uvicorn.protocols.utils import get_path_with_query_string
 
+from automation.models import AutomationRule
 from devices.models import Device, DeviceStatusCollection, DeviceType
 from sensors.models import Sensor, SensorData, SensorStatusCollection, SensorType
 from projects.consumers import ProjectStreamConsumer
@@ -138,6 +139,56 @@ class LatestValuesCacheTests(SimpleTestCase):
         self.assertEqual(cache.snapshot("plugin_a"), [first])
         self.assertEqual(cache.snapshot("plugin_b"), [second])
         self.assertCountEqual(cache.snapshot(), [first, second])
+
+
+class AutomationRuleRealtimeSignalTests(TestCase):
+    def setUp(self):
+        with (
+            patch("services.realtime.signals.dispatch.publish_automation_rule"),
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.rule = AutomationRule.objects.create(
+                name="实时广播测试规则",
+                script_id="realtime-signal-rule",
+                script="def loop():\n    return True",
+                device_list=[],
+            )
+
+    def test_last_run_time_only_update_is_not_broadcast(self):
+        with (
+            patch(
+                "services.realtime.signals.dispatch.publish_automation_rule"
+            ) as publish,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.rule.last_run_time = timezone.now()
+            self.rule.save(update_fields=["last_run_time"])
+
+        publish.assert_not_called()
+
+    def test_lifecycle_update_is_broadcast_immediately(self):
+        with (
+            patch(
+                "services.realtime.signals.dispatch.publish_automation_rule"
+            ) as publish,
+            self.captureOnCommitCallbacks(execute=True),
+        ):
+            self.rule.is_launched = True
+            self.rule.process_status = "running"
+            self.rule.last_run_time = timezone.now()
+            self.rule.save(
+                update_fields=[
+                    "is_launched",
+                    "process_status",
+                    "last_run_time",
+                ]
+            )
+
+        publish.assert_called_once()
+        payload = publish.call_args.args[0]
+        self.assertEqual(payload["id"], self.rule.id)
+        self.assertTrue(payload["is_launched"])
+        self.assertEqual(payload["process_status"], "running")
 
 
 class AtomicIngestionTests(TestCase):

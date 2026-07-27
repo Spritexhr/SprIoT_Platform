@@ -3,9 +3,10 @@
 """
 import logging
 
+from django.conf import settings
 from django.db import connection
 from django.db.models import Count, OuterRef, Q, Subquery
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.utils import timezone
@@ -16,8 +17,84 @@ from config.platform_config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _check_database_connection() -> bool:
+    """执行真实 SQL；MySQL 探针使用独立短超时连接，不影响业务查询超时。"""
+    if connection.vendor == "mysql":
+        params = connection.get_connection_params()
+        params.update(
+            connect_timeout=1,
+            read_timeout=1,
+            write_timeout=1,
+        )
+        probe = connection.Database.connect(**params)
+        try:
+            cursor = probe.cursor()
+            try:
+                cursor.execute("SELECT 1")
+                row = cursor.fetchone()
+            finally:
+                cursor.close()
+        finally:
+            probe.close()
+        return bool(row and row[0] == 1)
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+    return bool(row and row[0] == 1)
+
+
+def _check_redis_connection() -> bool:
+    """使用独立短超时连接 PING Redis，保证容器探针不会长时间挂住。"""
+    import redis
+
+    client = redis.Redis.from_url(
+        settings.REDIS_URL,
+        socket_connect_timeout=0.5,
+        socket_timeout=0.5,
+    )
+    try:
+        return bool(client.ping())
+    finally:
+        client.close()
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@throttle_classes([])
+def backend_health_check(request):
+    """仅检查 backend 自身依赖，供容器 healthcheck 使用。
+
+    不要求 mqtt_runner 已经启动，避免 backend 与 runner 的启动健康检查互相
+    等待；但会真实检查 MySQL 和 Redis，而不是只检查 TCP 端口。
+    """
+    checks = {}
+    try:
+        checks["database"] = "ok" if _check_database_connection() else "error"
+    except Exception as exc:
+        logger.warning("Backend 健康检查数据库失败: %s", exc)
+        checks["database"] = "error"
+
+    try:
+        checks["redis"] = "ok" if _check_redis_connection() else "error"
+    except Exception as exc:
+        logger.warning("Backend 健康检查 Redis 失败: %s", exc)
+        checks["redis"] = "error"
+
+    healthy = all(value == "ok" for value in checks.values())
+    return Response(
+        {
+            "status": "ok" if healthy else "degraded",
+            "checks": checks,
+            "timestamp": timezone.now().isoformat(),
+        },
+        status=200 if healthy else 503,
+    )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@throttle_classes([])
 def health_check(request):
     """
     健康检查端点
@@ -28,12 +105,7 @@ def health_check(request):
 
     # 数据库检查
     try:
-        # ensure_connection() 对已有持久连接不会发包；真实 SELECT 才能发现
-        # 网络已断、MySQL 已重启或 wait_timeout 已回收的陈旧连接。
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            row = cursor.fetchone()
-        if not row or row[0] != 1:
+        if not _check_database_connection():
             raise RuntimeError("database health query returned unexpected result")
         checks['database'] = 'ok'
     except Exception as e:

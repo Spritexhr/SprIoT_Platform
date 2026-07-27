@@ -11,6 +11,7 @@ from services.mqtt_command_bus import (
     MAX_DEVICE_ACK_TIMEOUT_SECONDS,
     MqttCommandBus,
     MqttCommandBusUnavailable,
+    MqttCommandQueueFull,
     MqttCommandWorker,
 )
 
@@ -107,6 +108,9 @@ class FakeRedis:
         self._next_id += 1
         self.streams[stream].append((message_id, dict(fields)))
         return message_id
+
+    def xlen(self, stream):
+        return len(self.streams[stream])
 
     def xgroup_create(self, stream, group, id="0-0", mkstream=False):
         marker = (stream, group)
@@ -219,6 +223,26 @@ class MqttCommandBusTests(SimpleTestCase):
         self.assertEqual(self.web_bus.get_request(request_id)["status"], "broker_acked")
         self.assertEqual(len(mqtt.calls), 1)
 
+    @override_settings(MQTT_COMMAND_STREAM_MAX_BACKLOG=1)
+    def test_command_backlog_limit_rejects_unbounded_growth(self):
+        bus = MqttCommandBus(self.redis, prefix="test:bounded")
+        bus.enqueue_command(
+            resource_type="device",
+            resource_id="PUMP-1",
+            topic="iot/devices/PUMP-1/control",
+            payload={"command": "start"},
+        )
+
+        with self.assertRaises(MqttCommandQueueFull):
+            bus.enqueue_command(
+                resource_type="device",
+                resource_id="PUMP-2",
+                topic="iot/devices/PUMP-2/control",
+                payload={"command": "start"},
+            )
+
+        self.assertEqual(len(self.redis.streams[bus.command_stream]), 1)
+
     def test_recovered_publishing_command_is_not_republished(self):
         request_id = self.web_bus.enqueue_command(
             resource_type="device",
@@ -288,6 +312,10 @@ class MqttCommandBusTests(SimpleTestCase):
 
     def test_redis_failure_is_fail_closed(self):
         class BrokenRedis:
+            def xlen(self, *args, **kwargs):
+                import redis
+                raise redis.ConnectionError("down")
+
             def pipeline(self, transaction=True):
                 import redis
                 raise redis.ConnectionError("down")
@@ -585,7 +613,9 @@ class BackendMqttLifecycleTests(SimpleTestCase):
     def test_connect_timeout_keeps_async_retry_loop_running(self, client_cls):
         from services.mqtt_service import MQTTService
 
-        client = client_cls.return_value
+        subscriber = Mock()
+        publisher = Mock()
+        client_cls.side_effect = [subscriber, publisher]
         service = MQTTService()
         service._load_connection_config = Mock(return_value={
             "broker": "unavailable.invalid",
@@ -597,14 +627,24 @@ class BackendMqttLifecycleTests(SimpleTestCase):
 
         self.assertFalse(service.connect(timeout=0.01))
 
-        client_cls.assert_called_once_with(
+        self.assertEqual(client_cls.call_count, 2)
+        client_cls.assert_any_call(
             client_id="spr-iot-platform-runner",
             clean_session=False,
             manual_ack=True,
         )
-        client.connect_async.assert_called_once()
-        client.loop_start.assert_called_once()
-        client.loop_stop.assert_not_called()
+        publisher_id = service._publisher_client_id("spr-iot-platform-runner")
+        client_cls.assert_any_call(
+            client_id=publisher_id,
+            clean_session=True,
+            manual_ack=False,
+        )
+        self.assertNotEqual(publisher_id, "spr-iot-platform-runner")
+        self.assertLessEqual(len(publisher_id.encode("utf-8")), 23)
+        for client in (subscriber, publisher):
+            client.connect_async.assert_called_once()
+            client.loop_start.assert_called_once()
+            client.loop_stop.assert_not_called()
 
     @patch("services.mqtt_service.mqtt.Client")
     def test_config_database_error_does_not_fall_back_to_local_broker(self, client_cls):
@@ -622,6 +662,9 @@ class BackendMqttLifecycleTests(SimpleTestCase):
     def test_empty_client_id_uses_stable_default(self, client_cls):
         from services.mqtt_service import MQTTService
 
+        subscriber = Mock()
+        publisher = Mock()
+        client_cls.side_effect = [subscriber, publisher]
         service = MQTTService()
         service._load_connection_config = Mock(return_value={
             "broker": "broker",
@@ -633,11 +676,92 @@ class BackendMqttLifecycleTests(SimpleTestCase):
         with patch.dict("os.environ", {"MQTT_CLIENT_ID": ""}, clear=False):
             self.assertTrue(service.connect_async())
 
-        client_cls.assert_called_once_with(
+        self.assertEqual(client_cls.call_count, 2)
+        client_cls.assert_any_call(
             client_id="spr-iot-platform-runner",
             clean_session=False,
             manual_ack=True,
         )
+        client_cls.assert_any_call(
+            client_id=service._publisher_client_id(
+                "spr-iot-platform-runner"
+            ),
+            clean_session=True,
+            manual_ack=False,
+        )
+
+    def test_runner_is_ready_only_after_both_mqtt_channels_connect(self):
+        from services.mqtt_service import MQTTService
+
+        service = MQTTService()
+        subscriber = Mock()
+        publisher = Mock()
+        service.client = subscriber
+        service.publisher_client = publisher
+
+        with patch.object(service, "_publish_system_status"):
+            service._on_connect(subscriber, None, {}, 0)
+            self.assertFalse(service.is_connected)
+            self.assertFalse(service.wait_until_connected(timeout=0))
+
+            service._on_publisher_connect(publisher, None, {}, 0)
+            self.assertTrue(service.is_connected)
+            self.assertTrue(service.wait_until_connected(timeout=0))
+
+            service._on_publisher_disconnect(publisher, None, 7)
+            self.assertFalse(service.is_connected)
+            self.assertFalse(service.wait_until_connected(timeout=0))
+
+    def test_publish_wait_uses_dedicated_publisher_network_loop(self):
+        import paho.mqtt.client as mqtt
+        from services.mqtt_service import MQTTService
+
+        service = MQTTService()
+        subscriber = Mock()
+        publisher = Mock()
+        publish_info = Mock()
+        publish_info.rc = mqtt.MQTT_ERR_SUCCESS
+        publish_info.is_published.return_value = True
+        publisher.publish.return_value = publish_info
+        service.client = subscriber
+        service.publisher_client = publisher
+        service._subscriber_connected = True
+        service._publisher_connected = True
+        service._refresh_connection_readiness()
+
+        result = service.publish_wait(
+            "iot/devices/FV0103/control",
+            {"opening": 60},
+            qos=1,
+            timeout=2,
+        )
+
+        self.assertEqual(result, (True, ""))
+        subscriber.publish.assert_not_called()
+        publisher.publish.assert_called_once()
+        publish_info.wait_for_publish.assert_called_once_with(timeout=2.0)
+
+    def test_publish_wait_rejects_unserializable_payload_before_paho(self):
+        from services.mqtt_service import MQTTService
+
+        service = MQTTService()
+        subscriber = Mock()
+        publisher = Mock()
+        service.client = subscriber
+        service.publisher_client = publisher
+        service._subscriber_connected = True
+        service._publisher_connected = True
+        service._refresh_connection_readiness()
+
+        result = service.publish_wait(
+            "iot/devices/FV0103/control",
+            {"invalid": object()},
+            qos=1,
+            timeout=2,
+        )
+
+        self.assertEqual(result, (False, "invalid_message"))
+        publisher.publish.assert_not_called()
 
     @patch("services.mqtt_service.mqtt.Client", side_effect=ValueError("bad client"))
     def test_client_initialization_failure_is_retryable(self, client_cls):
@@ -654,6 +778,7 @@ class BackendMqttLifecycleTests(SimpleTestCase):
 
         self.assertFalse(service.connect_async())
         self.assertIsNone(service.client)
+        self.assertIsNone(service.publisher_client)
         self.assertEqual(service.connection_state, "disconnected")
         self.assertIn("client_init_failed", service.last_error)
 
@@ -763,8 +888,10 @@ class StatusAckCommitOrderingTests(SimpleTestCase):
             handle_mqtt_status_message,
         )
 
-        get_sensor.return_value = Mock()
-        ok = handle_mqtt_status_message("topic", {
+        get_sensor.return_value = Mock(
+            mqtt_topic_status="iot/sensors/S-1/status",
+        )
+        ok = handle_mqtt_status_message("iot/sensors/S-1/status", {
             "sensor_id": "S-1",
             "status": {"online": True},
             "event": "online",
@@ -789,8 +916,10 @@ class StatusAckCommitOrderingTests(SimpleTestCase):
             handle_mqtt_device_status_message,
         )
 
-        get_device.return_value = Mock()
-        ok = handle_mqtt_device_status_message("topic", {
+        get_device.return_value = Mock(
+            mqtt_topic_data="iot/devices/D-1/status",
+        )
+        ok = handle_mqtt_device_status_message("iot/devices/D-1/status", {
             "device_id": "D-1",
             "status": {"power": True},
             "event": "state",
